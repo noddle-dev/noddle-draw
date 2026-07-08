@@ -1,0 +1,74 @@
+/* properties feature styles — owned by its feature; imported after tokens.css */
+
+/* Font-size stepper (− value +) in the Properties → Text group. */
+.props2 .fs-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #fff;
+}
+.props2 .fs-step .fs-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text, #1a1d23);
+}
+.props2 .fs-step .fs-btn:hover {
+  background: var(--accent-soft, #eef4ff);
+}
+.props2 .fs-step .fs-val {
+  min-width: 30px;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* direct-entry variant: a real input between the − / + steppers */
+.props2 .fs-step .fs-input {
+  width: 40px;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 0;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.props2 .fs-step .fs-input::-webkit-outer-spin-button,
+.props2 .fs-step .fs-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.props2 .fs-step .fs-input:focus {
+  background: var(--accent-soft, #eef4ff);
+}
+
+/* Bold / Italic / Underline toggle buttons. */
+.props2 .text-style-btns {
+  display: inline-flex;
+  gap: 4px;
+}
+.props2 .text-style-btns .tsb {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text, #1a1d23);
+}
+.props2 .text-style-btns .tsb:hover {
+  background: var(--accent-soft, #eef4ff);
+}
+.props2 .text-style-btns .tsb.active {
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  color: #fff;
+}

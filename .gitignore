@@ -1,0 +1,21 @@
+# secrets / local env — never commit
+.env
+.env.*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# node / vite
+node_modules/
+dist/
+
+# noddle local storage — user data, never commit
+backend/storage/
+
+# tooling / OS
+.omc/
+.claude/worktrees/
+.DS_Store

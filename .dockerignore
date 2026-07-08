@@ -1,0 +1,28 @@
+# VCS / local env
+.git
+.gitignore
+.env
+.venv
+.claude
+
+# Python artifacts
+**/__pycache__
+**/*.pyc
+
+# Node artifacts (SPA is built inside stage 1; dist is produced there too)
+**/node_modules
+web/dist
+
+# Local runtime data — never bake into the image (Dockerfile mkdir's it;
+# the app also creates it on demand). Mounted as a named volume in compose.
+backend/storage
+
+# Not needed by the image
+docs
+frontend
+mcp
+publish
+*.md
+*.gif
+*.zip
+send_teams_alert.py

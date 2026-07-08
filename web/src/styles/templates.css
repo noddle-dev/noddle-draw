@@ -1,0 +1,149 @@
+/* templates feature styles — owned by its feature; imported after tokens.css.
+ *
+ * Adds the Lucid-style gallery upgrades on top of the base .tpl-* classes that
+ * live in tokens.css: doodle rail icons, horizontally-scrollable carousel rows,
+ * per-row headers with a "See all" link, and richer thumbnail sizing. All colours
+ * come from design tokens so the modal reads correctly in light and dark. */
+
+/* ---- Category rail: doodle icons ---- */
+.tpl-side-item {
+  align-items: center;
+}
+.tpl-side-item .ico {
+  width: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  flex-shrink: 0;
+}
+.tpl-side-item:hover .ico {
+  color: var(--muted);
+}
+.tpl-side-item.active .ico {
+  color: var(--accent);
+}
+.tpl-side-item .ico svg {
+  display: block;
+}
+
+/* ---- Per-row section header (icon + label + "See all") ---- */
+.tpl-row-title {
+  gap: 9px;
+}
+.tpl-row-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.tpl-row-ico svg {
+  display: block;
+}
+.tpl-row-more {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+}
+.tpl-row-more:hover {
+  background: var(--accent-soft);
+}
+
+/* ---- Carousel row ---- */
+.tpl-carousel {
+  position: relative;
+}
+.tpl-row-scroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  padding: 4px 2px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  scroll-snap-type: x proximity;
+}
+.tpl-row-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.tpl-row-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 20px;
+}
+.tpl-row-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tpl-row-scroll .tpl-card {
+  scroll-snap-align: start;
+}
+
+/* Fixed-width cards inside a carousel so they don't collapse in the flex row. */
+.tpl-card-fixed {
+  flex: 0 0 232px;
+  width: 232px;
+}
+
+/* ---- Prev / next scroll affordances ---- */
+.tpl-row-nav {
+  position: absolute;
+  top: 60px; /* roughly the vertical centre of a card thumbnail */
+  transform: translateY(-50%);
+  z-index: 3;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.tpl-row-nav:hover {
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+}
+.tpl-row-nav.left {
+  left: -6px;
+}
+.tpl-row-nav.right {
+  right: -6px;
+}
+/* Reveal the nav buttons on row hover / keyboard focus only (Lucid-style). */
+.tpl-carousel .tpl-row-nav {
+  opacity: 0;
+  pointer-events: none;
+}
+.tpl-carousel:hover .tpl-row-nav,
+.tpl-carousel:focus-within .tpl-row-nav {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---- Thumbnail polish: keep the mini-render clean at card size ---- */
+.tpl-card-thumb {
+  overflow: hidden;
+}
+.tpl-card-thumb svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+.tpl-card-name {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

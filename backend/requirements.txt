@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+# AI (image→SVG, text→diagram) calls Claude Opus 4.8 on Databricks Model Serving
+# using stdlib urllib (OAuth M2M token mint + /serving-endpoints/.../invocations),
+# so no extra SDK dependency is required. See app/services/ai.py.
+# Optional Postgres persistence (activated by DATABASE_URL): psycopg v3 +
+# connection pool, plain SQL — no ORM. Only imported when DATABASE_URL is set.
+psycopg[binary,pool]>=3

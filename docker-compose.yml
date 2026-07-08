@@ -1,0 +1,69 @@
+# noddle — app (FastAPI + built SPA) + Postgres.
+# Optional vars (DATABRICKS_*, NODDLE_*) can live in a .env file next to this
+# compose file — docker compose reads it automatically. Vars listed without a
+# value below are passed through only when set, so absent AI config degrades
+# gracefully to 503 instead of overriding backend defaults with empty strings.
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        # On networks with TLS interception, build with the proxy's root CA:
+        #   EXTRA_CA_CERT="$(cat corp-root-ca.pem)" docker compose build
+        - EXTRA_CA_CERT=${EXTRA_CA_CERT:-}
+    ports:
+      # Host port is configurable (NODDLE_PORT in .env) — handy when another
+      # dev server already owns 8000.
+      - "${NODDLE_PORT:-8000}:8000"
+    environment:
+      # Contract with the Postgres persistence layer — do not change.
+      - DATABASE_URL=postgresql://noddle:noddle@db:5432/noddle
+      # Excalidraw-style anonymous mode (default ON for the OSS build):
+      # guests draw without an account; the board URL is the share capability.
+      # Set NODDLE_ANON=0 to require accounts.
+      - NODDLE_ANON=${NODDLE_ANON:-1}
+      # Optional AI (Databricks Model Serving) + CORS passthrough.
+      - DATABRICKS_HOST
+      - DATABRICKS_TOKEN
+      - DATABRICKS_CONFIG_PROFILE
+      - DATABRICKS_CLAUDE_ENDPOINT
+      - NODDLE_ALLOWED_ORIGINS
+      # Optional object storage (B2/R2, S3-compatible) — rotated log segments.
+      - S3_ENDPOINT_URL
+      - S3_BUCKET
+      - S3_ACCESS_KEY_ID
+      - S3_SECRET_ACCESS_KEY
+      # Optional Google SSO (generic OIDC, ADR-0003).
+      - OIDC_ISSUER
+      - OIDC_CLIENT_ID
+      - OIDC_CLIENT_SECRET
+      - OIDC_REDIRECT_URL
+    volumes:
+      # File-backed storage (documents, index, auth.json, audit.log, ...)
+      # is still used alongside Postgres.
+      - noddle_storage:/app/backend/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=noddle
+      - POSTGRES_PASSWORD=noddle
+      - POSTGRES_DB=noddle
+    # ports:
+    #   - "5432:5432"  # uncomment to reach Postgres from the host for debugging
+    volumes:
+      - noddle_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noddle -d noddle"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  noddle_storage:
+  noddle_pgdata:
