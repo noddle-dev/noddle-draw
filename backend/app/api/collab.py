@@ -5,7 +5,9 @@
 protocol is deliberately simple, full-state last-write-wins:
 
   client → server
-    {"t": "hello",  "name": str, "color": str}
+    {"t": "hello",  "name": str, "color": str, "clientId": str}
+                    # clientId (stable per browser) dedups reconnects: a new
+                    # hello evicts any prior connection with the same clientId.
     {"t": "state",  "diagram": {"nodes": [...], "edges": [...]}}
     {"t": "cursor", "x": float, "y": float}          # content coords
   server → clients
@@ -98,8 +100,12 @@ class RoomManager:
                 await self.presence(room)
 
     async def presence(self, room: Room) -> None:
+        # Only publish display fields — client_id is an internal dedup key and
+        # must not leak to other peers.
         users = [
-            {"id": cid, **info} for cid, info in sorted(room.users.items())
+            {"id": cid, "name": info.get("name"), "color": info.get("color"),
+             "kind": info.get("kind")}
+            for cid, info in sorted(room.users.items())
         ]
         await self.broadcast(room, {"t": "presence", "users": users}, _is_presence=True)
 
@@ -162,10 +168,31 @@ async def collab_ws(websocket: WebSocket, doc_id: str) -> None:
             if t == "hello":
                 # Everyone is a guest — the client-chosen display name/color
                 # (localStorage identity) is the presence identity.
+                client_id = _clean_str(msg.get("clientId"), "", 64) or None
+                # One browser = one presence entry. A reconnect (network blip,
+                # rename → disconnect+connect) opens a NEW socket while the old
+                # one may still linger; evict any prior connection carrying the
+                # same stable clientId so it can't show as a duplicate "you".
+                if client_id:
+                    stale = [
+                        other
+                        for other, info in room.users.items()
+                        if other != cid and info.get("client_id") == client_id
+                    ]
+                    for other in stale:
+                        old = room.sockets.pop(other, None)
+                        room.users.pop(other, None)
+                        if old is not None:
+                            try:
+                                await old.close(code=4001)
+                            except Exception:
+                                pass
+                        await manager.broadcast(room, {"t": "bye", "id": other})
                 room.users[cid] = {
                     "name": _clean_str(msg.get("name"), f"Guest {cid}"),
                     "color": _clean_str(msg.get("color"), "#2563eb", 16),
                     "kind": "guest",
+                    "client_id": client_id,
                 }
                 await manager.send(
                     websocket,

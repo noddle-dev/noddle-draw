@@ -20,10 +20,12 @@ is auto-generated in your browser (rename it in the Share dialog).
 
 ## Real diagramming, with living connectors
 
-Flowchart shapes, containers, multi-page boards, stencil libraries, text wrap,
-align/distribute, full keyboard shortcuts — and orthogonal auto-routed arrows
-(A\* elbow routing with draggable waypoints) that can **animate**: dash, dots,
-beam or pulse flows to show data moving through your system.
+Flowchart shapes, standalone text, containers, multi-page boards, stencil
+libraries, text wrap, align/distribute, rotation, grouping (`⌘G`), rubber-band
+select across shapes *and* connectors, full keyboard shortcuts — and orthogonal
+auto-routed arrows (A\* elbow routing with draggable waypoints) that can
+**animate**: dash, dots, beam or pulse flows to show data moving through your
+system.
 
 ![Animated edges — beam flows on a system diagram](docs/media/animated.gif)
 

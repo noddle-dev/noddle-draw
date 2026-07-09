@@ -16,6 +16,7 @@
 import { create } from "zustand";
 import { useDiagramStore } from "./diagramStore";
 import { pauseHistory } from "./diagramHistory";
+import { clientId } from "../shared/api/client";
 
 export interface Peer {
   id: number;
@@ -237,7 +238,10 @@ export function connectCollab(docId: string): void {
   ws = socket;
 
   socket.onopen = () => {
-    sendJson({ t: "hello", ...getIdentity() });
+    // clientId is this browser's stable id: the server evicts any prior
+    // connection carrying it, so a reconnect (network blip, rename) never
+    // leaves a duplicate "ghost" of you in the presence list.
+    sendJson({ t: "hello", ...getIdentity(), clientId: clientId() });
     useCollabStore.setState({ connected: true });
   };
 
