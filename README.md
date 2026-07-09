@@ -102,16 +102,19 @@ Single deployable, clean layering:
 
 Run the tests: `python -m pytest backend/tests -q` and `cd web && npm run typecheck`.
 
-## Security notes
+## Security
 
 Boards are protected by unguessable URLs (capability links) — the same model
 as Excalidraw share links: anyone with a board's link can view and co-edit it,
 so treat the link as the secret it is. Uploaded and AI-generated SVG is
-sanitized server-side (scripts, event handlers and foreign objects stripped).
-BYOK AI keys live only in the browser's localStorage and transit per-request
-over HTTPS; the server neither stores nor logs them.
+sanitized server-side, and BYOK AI keys live only in your browser — the server
+never stores or logs them.
 
-### Upgrading from the accounts-era build
+Found a vulnerability? Please report it privately — see
+**[SECURITY.md](SECURITY.md)** for the reporting channel, scope, and threat
+model. Don't open a public issue for security problems.
+
+## Upgrading from the accounts-era build
 
 Older deployments (with users/teams/billing) keep their extra tables — this
 build simply stops using them. To make pre-existing boards reachable under the
