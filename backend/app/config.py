@@ -49,44 +49,12 @@ class Settings:
     """Runtime configuration."""
 
     storage_dir: Path = field(default_factory=lambda: BACKEND_ROOT / "storage")
-    # Excalidraw-style ANONYMOUS mode (NODDLE_ANON=1): guests create boards
-    # without signing in; anonymous boards get link_policy "edit" so the URL
-    # itself is the sharing capability. Accounts still work alongside.
-    anon_mode: bool = field(
-        default_factory=lambda: os.environ.get("NODDLE_ANON", "").strip().lower()
-        in ("1", "true", "yes")
-    )
     allowed_origins: list[str] = field(default_factory=_default_origins)
     # Optional Postgres persistence (postgresql://user:pass@host:5432/dbname).
     # Present + reachable → Postgres adapters; absent or unreachable → file
-    # adapters with a boot warning, never a crash (audit.log stays file-based).
+    # adapters with a boot warning, never a crash.
     database_url: str | None = field(
         default_factory=lambda: os.environ.get("DATABASE_URL") or None
-    )
-    # Admin key for privileged team-play operations (kill a game room). Override
-    # via NODDLE_ADMIN_KEY; the default suits the single-tenant LAN mockup (only
-    # gates ephemeral game rooms — no document/data access).
-    admin_key: str = field(default_factory=lambda: os.environ.get("NODDLE_ADMIN_KEY", "noddle-admin"))
-    # ---- Lemon Squeezy billing (all optional — absent ⇒ checkout answers 503,
-    # never a boot crash; the webhook rejects everything without the secret).
-    lemonsqueezy_api_key: str | None = field(
-        default_factory=lambda: os.environ.get("LEMONSQUEEZY_API_KEY") or None
-    )
-    lemonsqueezy_store_id: str | None = field(
-        default_factory=lambda: os.environ.get("LEMONSQUEEZY_STORE_ID") or None
-    )
-    lemonsqueezy_webhook_secret: str | None = field(
-        default_factory=lambda: os.environ.get("LEMONSQUEEZY_WEBHOOK_SECRET") or None
-    )
-    # Variant ids of the three paid plans (see the landing page tiers).
-    lemonsqueezy_variant_pro_monthly: str | None = field(
-        default_factory=lambda: os.environ.get("LEMONSQUEEZY_VARIANT_ID_PRO_MONTHLY") or None
-    )
-    lemonsqueezy_variant_pro_yearly: str | None = field(
-        default_factory=lambda: os.environ.get("LEMONSQUEEZY_VARIANT_ID_PRO_YEARLY") or None
-    )
-    lemonsqueezy_variant_team_yearly: str | None = field(
-        default_factory=lambda: os.environ.get("LEMONSQUEEZY_VARIANT_ID_TEAM_YEARLY") or None
     )
     # ---- S3-compatible object storage (Cloudflare R2 — DESIGN.md §7). All
     # optional: any missing ⇒ ObjectStorage.enabled is False and log-segment

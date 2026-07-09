@@ -30,9 +30,16 @@ import {
   type Tool,
 } from "../editor-core";
 import { FLOW_INTENSITY, type FlowIntensity } from "../editor-core/diagram";
-import { api, ApiError, type DocMeta, type PublicUser } from "../shared/api/client";
-import { useAppStore } from "./appStore";
-import { useAuthStore } from "./authStore";
+import { api, ApiError, type DocMeta } from "../shared/api/client";
+import {
+  clearLastBoardId,
+  forgetBoard,
+  lastBoardId,
+  recentBoards,
+  rememberBoard,
+  useAppStore,
+} from "./appStore";
+import { getIdentity } from "./collabStore";
 import { useDiagramStore } from "./diagramStore";
 import { onPageSwitch, usePagesStore } from "./pagesStore";
 import { resetHistory, useDiagramHistory } from "./diagramHistory";
@@ -82,12 +89,13 @@ interface EditorState {
   // ---- document / persistence ----
   docId: string | null;
   docName: string;
+  /** This browser's recent boards (localStorage — there is no server list). */
   docs: DocMeta[];
   dirty: boolean;
   /** Caller's effective role on the open board (server-derived). */
-  myRole: "owner" | "editor" | "viewer";
-  /** The open board's owner (public profile) — powers the "Owned by …" chip. */
-  docOwner: PublicUser | null;
+  myRole: "editor" | "viewer";
+  /** A /d/{id} deep link that 404'd/403'd — show the not-found screen. */
+  notFound: boolean;
 
   // ---- viewport ----
   cam: Camera;
@@ -129,18 +137,18 @@ interface EditorState {
 
   currentSvg: () => string;
   /** Serialise the FULL board (uploaded content + diagram layer) to SVG. */
-  currentBoardSvg: (opts?: { watermark?: boolean }) => string;
+  currentBoardSvg: () => string;
   /** Grow the white page so it always contains every diagram node (+margin).
    * Never shrinks — the artboard only expands as content spreads out. */
   ensureArtboardFits: () => void;
 
-  // document ops (documents feature calls these)
+  // document ops
+  /** Refresh the recents list from localStorage (no server call). */
   refreshDocs: () => Promise<void>;
   openDoc: (id: string) => Promise<void>;
   uploadFile: (file: File) => Promise<void>;
   /** Persist the board. `quiet` = autosave: no "Saving…" flash, light status. */
   save: (opts?: { quiet?: boolean }) => Promise<void>;
-  deleteDoc: (id: string) => Promise<void>;
 
   // object ops (toolbar)
   deleteSelection: () => void;
@@ -161,7 +169,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   // Fail-safe: assume view-only until the server says otherwise (GET /documents/{id}
   // always returns my_role for accessible boards — "editor" whenever edit passes).
   myRole: "viewer",
-  docOwner: null,
+  notFound: false,
 
   cam: { ...initialCam },
   artboard: { w: 100, h: 100 },
@@ -359,7 +367,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
-  currentBoardSvg(opts) {
+  currentBoardSvg() {
     const { refs, artboard } = get();
     if (!refs) return "";
     const { w, h } = artboard;
@@ -397,47 +405,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
       diagramHtml = clone.outerHTML;
     }
-    // Free-tier export watermark: a small Noddle mark bottom-right (paid tiers
-    // pass watermark:false). NOT added on save() — it's export-only, so the
-    // stored/round-tripped board never carries it.
-    let mark = "";
-    if (opts?.watermark) {
-      const s = Math.max(18, Math.min(w, h) * 0.03); // tile side, scales gently
-      const mx = w - s - s * 0.7;
-      const my = h - s - s * 0.7;
-      const label = s * 0.9;
-      mark =
-        `<g opacity="0.55" font-family="Inter, system-ui, sans-serif">` +
-        `<rect x="${mx}" y="${my}" width="${s}" height="${s}" rx="${s * 0.28}" fill="#211e19"/>` +
-        `<rect x="${mx + s * 0.32}" y="${my + s * 0.32}" width="${s * 0.36}" height="${s * 0.36}" ` +
-        `transform="rotate(45 ${mx + s / 2} ${my + s / 2})" fill="none" stroke="#fff" stroke-width="${s * 0.075}"/>` +
-        `<circle cx="${mx + s * 0.78}" cy="${my + s * 0.22}" r="${s * 0.12}" fill="#ea580c"/>` +
-        `<text x="${mx - s * 0.35}" y="${my + s * 0.66}" text-anchor="end" ` +
-        `font-size="${label}" fill="#6b7280" font-weight="600">Made with Noddle</text>` +
-        `</g>`;
-    }
     const ox = artboard.ox ?? 0, oy = artboard.oy ?? 0;
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${contentClone.innerHTML}${diagramHtml}${mark}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${contentClone.innerHTML}${diagramHtml}</svg>`;
   },
 
   async refreshDocs() {
-    try {
-      const docs = await api.list();
-      set({ docs });
-    } catch {
-      set({ docs: [] });
-    }
+    // Anonymous product: there is no server-side listing (link access ≠
+    // discovery) — "your boards" are the ones this browser remembers.
+    set({
+      docs: recentBoards().map((r) => ({
+        id: r.id,
+        name: r.name,
+        created_at: r.at / 1000,
+        updated_at: r.at / 1000,
+      })),
+    });
   },
 
   async openDoc(id) {
     try {
-      const { svg, meta, diagram, my_role, owner } = await api.get(id);
+      const { svg, meta, diagram, my_role } = await api.get(id);
       set({
         docId: id,
         docName: meta?.name ? "· " + meta.name : "",
         myRole: my_role ?? "viewer", // fail-safe: no role from server ⇒ view-only
-        docOwner: owner ?? null,
+        notFound: false,
       });
+      // Remember what this browser is working on — drives "/" and the Boards
+      // menu. Embeds are passive views, never "your" board.
+      if (!useAppStore.getState().embedMode) {
+        rememberBoard(id, meta?.name || "Untitled board");
+      }
       get().loadSvgString(svg);
       // Restore the editable board through the PAGES store: a board's diagram
       // payload is `{pages:[…]}` (or legacy `{nodes,edges}` → 1 page). The
@@ -467,20 +465,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (savedCam) get().setCam(savedCam);
       await get().refreshDocs();
     } catch (err) {
-      // Access denied: guests are routed to the login screen (the board
-      // reopens automatically after sign-in); signed-in users go back to
-      // their dashboard — a broken empty canvas helps no one.
-      const denied =
-        err instanceof ApiError && (err.status === 401 || err.status === 403);
-      if (denied) {
-        const me = useAuthStore.getState().me;
-        if (me?.kind !== "user") {
-          useAppStore.getState().promptSignIn("Sign in to view this board.", id);
+      const gone =
+        err instanceof ApiError &&
+        (err.status === 401 || err.status === 403 || err.status === 404);
+      if (gone) {
+        forgetBoard(id);
+        if (id === lastBoardId() || !lastBoardId()) {
+          // OUR remembered board is stale (deleted server-side / wiped
+          // storage) — silently start a fresh one instead of a dead end.
+          clearLastBoardId();
+          try {
+            const meta = await api.create({ name: "Untitled board" });
+            rememberBoard(meta.id, meta.name);
+            useAppStore.getState().openInEditor(meta.id, { replace: true });
+            return;
+          } catch {
+            /* backend down — fall through to the error status */
+          }
+        } else {
+          // Someone ELSE's link that doesn't resolve — say so.
+          set({ notFound: true, docId: null, docName: "" });
           return;
         }
-        useAppStore.getState().go("dashboard");
-        set({ status: "You don't have access to this board.", statusKind: "error" });
-        return;
       }
       set({
         status: "Failed to open document: " + (err instanceof Error ? err.message : String(err)),
@@ -534,7 +540,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       } else if (nodeCount) {
         diagram = { nodes: Object.values(ds.nodes), edges: Object.values(ds.edges) };
       }
-      await api.save(docId, get().currentBoardSvg(), diagram as never);
+      await api.save(docId, get().currentBoardSvg(), diagram as never, getIdentity().name);
       const when = new Date().toLocaleTimeString();
       set({
         dirty: false,
@@ -545,22 +551,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     } catch (err) {
       set({
         status: "Save failed: " + (err instanceof Error ? err.message : String(err)),
-        statusKind: "error",
-      });
-    }
-  },
-
-  async deleteDoc(id) {
-    try {
-      await api.remove(id);
-      if (get().docId === id) {
-        set({ docId: null, docName: "" });
-      }
-      await get().refreshDocs();
-      set({ status: "Document deleted.", statusKind: "ok" });
-    } catch (err) {
-      set({
-        status: "Delete failed: " + (err instanceof Error ? err.message : String(err)),
         statusKind: "error",
       });
     }

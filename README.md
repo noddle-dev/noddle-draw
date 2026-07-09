@@ -1,27 +1,30 @@
 # ◇ noddle
 
-**Open-source collaborative diagram board** — structured shapes and smart
+**Open-source anonymous diagram board** — structured shapes and smart
 connectors like Lucidchart, instant no-login drawing and link-sharing like
 Excalidraw, plus an optional AI co-editor that edits the board with you
-(bring your own API key).
+(bring your own API key). Live at **draw.noddle.dev**.
 
+- ⚡ **Zero friction** — open the site, you're drawing. No accounts, no
+  workspaces: your identity lives in your browser and the board URL is the
+  sharing capability (Excalidraw-style). `/` reopens the board you were
+  working on.
 - 🎨 **Real diagramming** — flowchart shapes, orthogonal auto-routed arrows
   (A\* elbow routing with draggable waypoints), containers, multi-page boards,
   stencil libraries, text wrap, align/distribute, full keyboard shortcuts.
 - 👥 **Live collaboration** — shared cursors, presence, per-page state sync
-  over WebSocket. Share a link, draw together. Comments with @mentions.
-- ⚡ **Draw without an account** — in anonymous mode (default in this compose
-  setup) the board URL is the sharing capability, Excalidraw-style. Accounts,
-  teams and private boards are one env var away (`NODDLE_ANON=0`).
+  over WebSocket. Share a link, draw together. Anonymous comment threads.
 - ✦ **AI co-editor (optional, BYOK)** — chat with the board: "add an
   error-handling branch", "group these by tier", image→diagram conversion
-  (sketch/whiteboard photo → editable shapes), text/Mermaid→diagram. Works
-  with your own Anthropic / OpenAI / Gemini / OpenRouter key; without a key
-  the AI simply stays off.
+  (sketch/whiteboard photo → editable shapes), text/Mermaid→diagram. Your
+  Anthropic / OpenAI / Gemini / OpenRouter key stays in your browser and rides
+  each request — the server never stores it. Without a key the AI simply
+  stays off (or self-hosters can configure a shared Databricks pool).
 - 📤 **Export** — SVG, PNG, animated GIF, per-page deck PNGs, Mermaid, and a
   re-importable board JSON. Imports draw.io files.
 - 🧩 **Agent-friendly** — a small [MCP server](mcp/) lets AI agents create and
-  edit boards through the REST API with their own identity.
+  edit boards through the REST API (the board URL is the capability — no
+  tokens needed).
 
 ## Quick start
 
@@ -53,10 +56,9 @@ configured. Copy `.env.example` to `.env` and fill in what you need:
 
 | Variable | Purpose |
 |---|---|
-| `NODDLE_ANON` | `1` = draw without accounts (boards are link-shared). `0` = accounts required, boards private by default. |
 | `DATABASE_URL` | Postgres persistence (schema auto-migrates at boot). Absent → file storage. |
-| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | SSO via any OIDC provider (Google, Keycloak, Entra…). |
-| `DATABRICKS_*` | Optional server-side AI pool. Most self-hosters skip this — users bring their own AI key in Settings instead. |
+| `NODDLE_ALLOWED_ORIGINS` | CORS allowlist for dev tooling (prod is same-origin). |
+| `DATABRICKS_*` | Optional shared server AI pool. Most self-hosters skip this — users bring their own AI key in the app instead. |
 | `S3_*` | Optional S3-compatible object storage for log shipping/backups. |
 
 ## Architecture (short version)
@@ -76,11 +78,29 @@ Run the tests: `python -m pytest backend/tests -q` and `cd web && npm run typech
 
 ## Security notes
 
-Anonymous boards are protected by unguessable URLs (capability links) — same
-model as Excalidraw share links. Accounts mode adds ownership, share roles
-(viewer/editor), teams, and private-by-default boards. Uploaded and
-AI-generated SVG is sanitized server-side (scripts, event handlers and foreign
-objects stripped). Agent tokens are stored as SHA-256.
+Boards are protected by unguessable URLs (capability links) — the same model
+as Excalidraw share links: anyone with a board's link can view and co-edit it,
+so treat the link as the secret it is. Uploaded and AI-generated SVG is
+sanitized server-side (scripts, event handlers and foreign objects stripped).
+BYOK AI keys live only in the browser's localStorage and transit per-request
+over HTTPS; the server neither stores nor logs them.
+
+### Upgrading from the accounts-era build
+
+Older deployments (with users/teams/billing) keep their extra tables — this
+build simply stops using them. To make pre-existing boards reachable under the
+anonymous model, run once against your database:
+
+```sql
+UPDATE documents SET owner_id = NULL;
+UPDATE documents SET link_policy = 'edit' WHERE link_policy = 'private';
+```
+
+(Skip the second statement if some boards must stay dark.) Optional cleanup of
+dead tables: `DROP TABLE users, sessions, tokens, teams, team_members,
+ai_settings, subscriptions, ls_webhook_events, billing_events,
+pricing_catalog, folders, document_shares, mentions, user_activity, ai_usage,
+games_leaderboard, notifications;`
 
 ## License
 

@@ -127,16 +127,9 @@ async def collab_ws(websocket: WebSocket, doc_id: str) -> None:
         await websocket.close(code=4404)
         return
 
-    # ---- resolve the ACL for this room (ADR-0002) --------------------------
-    # Identity: session cookie (humans) or ?token= (agents — headers are hard
-    # to set on browser WebSockets, so agents pass the bearer as a query param
-    # over the same origin). Viewers may watch; only editors may send state.
-    auth = websocket.app.state.auth_service
-    principal = auth.principal_from_bearer(websocket.query_params.get("token"))
-    if not principal.is_authenticated:
-        principal = auth.principal_from_session(
-            websocket.cookies.get("noddle_session")
-        )
+    # ---- resolve the ACL for this room -------------------------------------
+    # Anonymous-only: the board URL is the capability. Viewers may watch;
+    # only editors (link_policy "edit") may send state.
     try:
         doc = websocket.app.state.document_service.get(doc_id)
     except Exception:
@@ -144,10 +137,10 @@ async def collab_ws(websocket: WebSocket, doc_id: str) -> None:
         return
     from app.services.auth import can  # local import avoids a cycle at boot
 
-    if not can(principal, "view", doc.meta, auth):
+    if not can("view", doc.meta):
         await websocket.close(code=4403)
         return
-    may_edit = can(principal, "edit", doc.meta, auth)
+    may_edit = can("edit", doc.meta)
 
     await websocket.accept()
 
@@ -167,20 +160,13 @@ async def collab_ws(websocket: WebSocket, doc_id: str) -> None:
             t = msg.get("t")
 
             if t == "hello":
-                # Authenticated identities are SERVER-ASSIGNED (a client can't
-                # spoof a teammate); guests may pick their display name.
-                if principal.is_authenticated:
-                    room.users[cid] = {
-                        "name": principal.name,
-                        "color": principal.color,
-                        "kind": principal.kind,  # agents render distinctly
-                    }
-                else:
-                    room.users[cid] = {
-                        "name": _clean_str(msg.get("name"), f"Guest {cid}"),
-                        "color": _clean_str(msg.get("color"), "#2563eb", 16),
-                        "kind": "guest",
-                    }
+                # Everyone is a guest — the client-chosen display name/color
+                # (localStorage identity) is the presence identity.
+                room.users[cid] = {
+                    "name": _clean_str(msg.get("name"), f"Guest {cid}"),
+                    "color": _clean_str(msg.get("color"), "#2563eb", 16),
+                    "kind": "guest",
+                }
                 await manager.send(
                     websocket,
                     {

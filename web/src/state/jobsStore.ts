@@ -14,7 +14,7 @@
  * uploads; history rows fall back to the created board's export.svg.
  */
 import { create } from "zustand";
-import { ApiError, api, type AiBackendChoice, type AiJobOut } from "../shared/api/client";
+import { ApiError, api, type AiJobOut } from "../shared/api/client";
 import { aiErrorMessage, withAiHints } from "../shared/aiError";
 import { useEditorStore } from "./editorStore";
 
@@ -24,12 +24,11 @@ import { useEditorStore } from "./editorStore";
 async function submitWithRetry(
   file: File,
   prompt: string,
-  backend: AiBackendChoice,
 ): Promise<AiJobOut> {
   const delays = [2000, 5000];
   for (let attempt = 0; ; attempt++) {
     try {
-      return await api.createImageJob(file, prompt, backend);
+      return await api.createImageJob(file, prompt);
     } catch (err) {
       // Edge/restart errors carry no app detail — just the bare status text.
       // A REAL app 503 ("No API key configured…") must NOT retry.
@@ -62,7 +61,7 @@ export interface Job {
 interface JobsState {
   jobs: Job[];
   /** Queue an image→board job on the server (fire-and-forget). */
-  enqueueImageJob: (file: File, prompt: string, backend?: AiBackendChoice) => void;
+  enqueueImageJob: (file: File, prompt: string) => void;
   /** Merge the server-side job history in (called once by JobsTray). */
   loadHistory: () => Promise<void>;
   dismiss: (id: string) => void;
@@ -136,7 +135,7 @@ async function poll() {
 export const useJobsStore = create<JobsState>((set) => ({
   jobs: [],
 
-  enqueueImageJob(file, prompt, backend = "") {
+  enqueueImageJob(file, prompt) {
     // optimistic row while the upload POST is in flight
     const localId = `local${++seq}-${Date.now().toString(36)}`;
     const previewUrl = URL.createObjectURL(file);
@@ -154,7 +153,7 @@ export const useJobsStore = create<JobsState>((set) => ({
         ...s.jobs,
       ],
     }));
-    submitWithRetry(file, prompt, backend)
+    submitWithRetry(file, prompt)
       .then((job) => {
         // swap the optimistic row for the server job, keeping the thumbnail
         set((s) => ({

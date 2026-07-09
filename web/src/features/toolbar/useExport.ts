@@ -3,10 +3,9 @@
  * trigger a file download. Ported from the export/download section of
  * `frontend/editor.js`.
  */
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { useEditorStore } from "../../state/editorStore";
 import { usePagesStore } from "../../state/pagesStore";
-import { refreshWatermarkTier, watermarkOn } from "./watermark";
 
 function download(blob: Blob, name: string) {
   const a = document.createElement("a");
@@ -17,11 +16,9 @@ function download(blob: Blob, name: string) {
 }
 
 export function useExport() {
-  useEffect(refreshWatermarkTier, []);
-
   const exportSvg = useCallback(() => {
     const st = useEditorStore.getState();
-    const svg = st.currentBoardSvg({ watermark: watermarkOn() });
+    const svg = st.currentBoardSvg();
     if (!svg) return;
     download(
       new Blob([svg], { type: "image/svg+xml" }),
@@ -31,7 +28,7 @@ export function useExport() {
 
   const exportPng = useCallback(() => {
     const st = useEditorStore.getState();
-    const svg = st.currentBoardSvg({ watermark: watermarkOn() });
+    const svg = st.currentBoardSvg();
     if (!svg) return;
     const { w, h } = st.artboard;
     const dpr = window.devicePixelRatio || 1;
@@ -98,7 +95,7 @@ export function useExport() {
       usePagesStore.getState().switchPage(p.id);
       await twoFrames();
       const st = useEditorStore.getState();
-      const svg = st.currentBoardSvg({ watermark: watermarkOn() });
+      const svg = st.currentBoardSvg();
       if (!svg) continue;
       const blob = await rasterize(svg, st.artboard.w, st.artboard.h);
       n += 1;

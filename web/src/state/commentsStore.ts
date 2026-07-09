@@ -28,17 +28,9 @@ function saveVisible(v: boolean): void {
   try { localStorage.setItem(VIS_KEY, v ? "1" : "0"); } catch { /* ignore */ }
 }
 
-export interface Person {
-  id: string;
-  name: string;
-  email: string;
-  color: string;
-}
-
 interface CommentsState {
   docId: string | null;
   comments: CommentOut[];
-  people: Person[];
   /** 💬 tool armed — the next canvas click drops a comment pin. */
   commentMode: boolean;
   /** Whether comment pins/threads are drawn on the board (toggle to declutter). */
@@ -60,8 +52,8 @@ interface CommentsState {
   startDraft: (anchor: CommentAnchor, pageId: string | null) => void;
   cancelDraft: () => void;
   /** Submit the draft as a new root thread. */
-  submitDraft: (body: string, mentions: string[]) => Promise<void>;
-  reply: (rootId: string, body: string, mentions: string[]) => Promise<void>;
+  submitDraft: (body: string) => Promise<void>;
+  reply: (rootId: string, body: string) => Promise<void>;
   setResolved: (rootId: string, resolved: boolean) => Promise<void>;
   editBody: (commentId: string, body: string) => Promise<void>;
   remove: (commentId: string) => Promise<void>;
@@ -70,7 +62,6 @@ interface CommentsState {
 export const useCommentsStore = create<CommentsState>((set, get) => ({
   docId: null,
   comments: [],
-  people: [],
   commentMode: false,
   commentsVisible: loadVisible(),
   activeThreadId: null,
@@ -78,12 +69,12 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
   showResolved: false,
 
   async load(docId) {
-    set({ docId, comments: [], people: [], activeThreadId: null, draft: null });
+    set({ docId, comments: [], activeThreadId: null, draft: null });
     try {
       const out = await api.listComments(docId);
       // Doc switched again while fetching — drop the stale response.
       if (get().docId !== docId) return;
-      set({ comments: out.comments, people: out.people ?? [] });
+      set({ comments: out.comments });
     } catch {
       /* viewer without access / offline — leave empty */
     }
@@ -93,7 +84,6 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
     set({
       docId: null,
       comments: [],
-      people: [],
       commentMode: false,
       activeThreadId: null,
       draft: null,
@@ -145,15 +135,15 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
     set({ draft: null });
   },
 
-  async submitDraft(body, mentions) {
+  async submitDraft(body) {
     const { docId, draft } = get();
     if (!docId || !draft || !body.trim()) return;
     const out = await api.addComment(docId, {
       body,
       anchor: draft.anchor,
       page_id: draft.pageId,
-      mentions,
       guest_name: getIdentity().name,
+      guest_color: getIdentity().color,
     });
     set({ draft: null });
     applyOut(out, set, get);
@@ -163,14 +153,14 @@ export const useCommentsStore = create<CommentsState>((set, get) => ({
     if (newest) set({ activeThreadId: newest.id });
   },
 
-  async reply(rootId, body, mentions) {
+  async reply(rootId, body) {
     const { docId } = get();
     if (!docId || !body.trim()) return;
     const out = await api.addComment(docId, {
       body,
       parent_id: rootId,
-      mentions,
       guest_name: getIdentity().name,
+      guest_color: getIdentity().color,
     });
     applyOut(out, set, get);
   },

@@ -2,13 +2,13 @@
 
 JSONL at ``storage/audit.log`` — one event per line, never rewritten:
 
-    {"ts": …, "action": "share.add", "actor_kind": "user", "actor_id": …,
+    {"ts": …, "action": "doc.create", "actor_kind": "guest", "actor_id": null,
      "actor_name": …, "doc_id": …, "detail": …}
 
-Scope is deliberate: auth lifecycle + document lifecycle + sharing changes.
+Scope is deliberate: document lifecycle (create/upload/import/delete).
 Payload SAVES are excluded — the version history already records who saved
-what, and autosave every ~2s would drown the log. Reads are doc-scoped
-(the owner-visible viewer in HistoryPanel).
+what, and autosave every ~2s would drown the log. This is an OPS log
+(anonymous-only product: actors are guests), read by operators, not the UI.
 """
 from __future__ import annotations
 
@@ -50,19 +50,15 @@ class AuditService:
     ) -> None:
         """Append one event. Never raises — auditing must not break requests.
 
-        ``team_id`` is OPTIONAL team scoping for the admin activity view
-        (WS3): callers that know the team an event belongs to (membership
-        changes, board events on a team board) may stamp it. Existing call
-        sites keep working unchanged — team scope for legacy lines is derived
-        at READ time (doc_id → meta.team_id) by the /api/teams/{id}/audit
-        endpoint instead.
+        ``team_id`` is accepted for row-shape compatibility with old logs;
+        the anonymous-only product never stamps it.
         """
         try:
             event = {
                 "ts": time.time(),
                 "action": action,
                 "actor_kind": principal.kind,
-                "actor_id": principal.user_id or principal.agent_token_id,
+                "actor_id": None,
                 "actor_name": principal.name,
                 "doc_id": doc_id,
                 "detail": detail[:_MAX_DETAIL],

@@ -1,1 +1,0 @@
-export { DocumentsPanel } from "./DocumentsPanel";

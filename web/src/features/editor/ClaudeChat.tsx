@@ -12,17 +12,10 @@ import type { ChangeEvent } from "react";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, chatKey, useAppStore } from "../../state/appStore";
 import type { ChatMessage } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
-import { api, type AiSettings } from "../../shared/api/client";
+import { getAiKeyConfig } from "../../shared/api/client";
+import { AiKeySettings } from "../ai/AiKeySettings";
 import { askClaudeEdit } from "./claudeEdit";
 import { CHAT_SUGGESTIONS } from "./data";
-
-const PROVIDER_SHORT: Record<AiSettings["provider"], string> = {
-  claude: "Claude",
-  openai: "OpenAI",
-  gemini: "Gemini",
-  openrouter: "OpenRouter",
-  custom: "Custom",
-};
 
 const WELCOME: ChatMessage = {
   who: "ai" as const,
@@ -97,11 +90,10 @@ export function ClaudeChat() {
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // AI settings power the model picker's BYOK entries. Guests get a 401 here
-  // (require_user) — swallow it and show only the subscription models.
-  const [ai, setAi] = useState<AiSettings | null>(null);
-  const loadAi = () => void api.getAiSettings().then(setAi).catch(() => setAi(null));
-  useEffect(loadAi, []);
+  // Client-side BYOK: with a browser key configured the model comes from the
+  // key config (X-AI-* headers); the Databricks endpoint picker is pool-only.
+  const [keyCfg, setKeyCfg] = useState(getAiKeyConfig());
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
 
   const sessions = board?.sessions ?? [];
   const active = sessions.find((s) => s.id === board?.activeId);
@@ -112,33 +104,7 @@ export function ClaudeChat() {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, aiThinking]);
 
-  const byokProfiles = (ai?.byok_profiles ?? []).filter((p) => p.has_key);
-  // The dropdown value encodes the routing choice:
-  //   "sub:<databricks-endpoint>" → subscription mode, that endpoint for THIS session
-  //   "byok:<profile-id>"         → BYOK mode via that saved key
-  // ⚠ TRADE-OFF: BYOK mode + which profile is active are ACCOUNT-GLOBAL (they
-  // live on AISettings, not the chat session), so picking a BYOK profile here
-  // routes every board/session for this account until changed. Only the
-  // subscription Databricks endpoint is truly per-session (session.model). A
-  // fully per-session BYOK choice would need the profile id threaded through
-  // edit-diagram; this keeps the wiring minimal per the task's guidance.
   const sessionModel = active?.model ?? DEFAULT_CHAT_MODEL;
-  const selectValue =
-    ai?.mode === "byok" && ai.byok_active_id
-      ? `byok:${ai.byok_active_id}`
-      : `sub:${sessionModel}`;
-
-  const onPickModel = (value: string) => {
-    if (value.startsWith("byok:")) {
-      const pid = value.slice(5);
-      void api.activateByokProfile(pid).then(setAi).catch(() => {});
-    } else {
-      const model = value.slice(4);
-      setChatModel(docId, active?.id ?? "", model);
-      // leave BYOK if we were in it, so the subscription endpoint takes effect
-      if (ai?.mode === "byok") void api.putAiSettings({ mode: "subscription" }).then(setAi).catch(() => {});
-    }
-  };
 
   const send = (text: string) => {
     if (!text.trim()) return;
@@ -187,25 +153,38 @@ export function ClaudeChat() {
           <button className="chat-session-new" title="New session (clean context)" onClick={() => newChatSession(docId)}>＋</button>
         </div>
         <div className="chat-model-row">
-          <label className="chat-model" title="AI model / key used for this session">
-            <span className="lbl">Model</span>
-            <select value={selectValue} onChange={(e) => onPickModel(e.target.value)}>
-              <optgroup label="Subscription">
+          {keyCfg ? (
+            <label className="chat-model" title="Your browser-stored API key runs this chat">
+              <span className="lbl">Model</span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Your {keyCfg.provider} key{keyCfg.model ? ` · ${keyCfg.model}` : ""}
+              </span>
+              <button className="btn" style={{ marginLeft: 6 }} onClick={() => setKeyModalOpen(true)}>
+                Edit…
+              </button>
+            </label>
+          ) : (
+            <label className="chat-model" title="Server AI endpoint for this session">
+              <span className="lbl">Model</span>
+              <select
+                value={sessionModel}
+                onChange={(e) => setChatModel(docId, active?.id ?? "", e.target.value)}
+              >
                 {CHAT_MODELS.map((m) => (
-                  <option key={m.value} value={`sub:${m.value}`}>{m.label}</option>
+                  <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
-              </optgroup>
-              {byokProfiles.length > 0 && (
-                <optgroup label="Your API keys (BYOK)">
-                  {byokProfiles.map((p) => (
-                    <option key={p.id} value={`byok:${p.id}`}>
-                      {p.name} · {PROVIDER_SHORT[p.provider]}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-          </label>
+              </select>
+              <button className="btn" style={{ marginLeft: 6 }} onClick={() => setKeyModalOpen(true)}>
+                Use my key…
+              </button>
+            </label>
+          )}
+          {keyModalOpen && (
+            <AiKeySettings
+              onClose={() => setKeyModalOpen(false)}
+              onSaved={setKeyCfg}
+            />
+          )}
         </div>
         {usage && usage.calls > 0 && (
           <div className="chat-cost" title="Tokens used in this session">

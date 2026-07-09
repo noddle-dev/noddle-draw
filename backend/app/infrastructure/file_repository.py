@@ -2,13 +2,14 @@
 
 Documents are stored as ``{id}.svg`` files (plus an optional ``{id}.diagram.json``
 sidecar holding the editable node/edge JSON) under ``storage_dir`` with a JSON
-index (``index.json``) holding metadata + folders:
+index (``index.json``) holding metadata:
 
     { "version": 2,
-      "documents": { "<id>": {id, name, created_at, updated_at, folder_id} },
-      "folders":   { "<id>": {id, name, color, created_at} } }
+      "documents": { "<id>": {id, name, created_at, updated_at, ...} } }
 
 A v1 index (a bare ``{id: meta}`` mapping) is migrated transparently on read.
+Rows written by the old accounts build may carry extra keys (folder_id,
+team_id, shares, mentions on comments) — they are ignored on read.
 This is the only place that touches the filesystem for persistence, so swapping
 to a DB/object store later means adding a sibling adapter — services and domain
 stay untouched.
@@ -22,15 +23,13 @@ from pathlib import Path
 import shutil
 
 from app.domain.ids import is_valid_id
-from app.domain.models import (
-    Comment,
-    Document,
-    DocumentMeta,
-    DocumentVersion,
-    Folder,
-    listed_for,
-)
+from app.domain.models import Comment, Document, DocumentMeta, DocumentVersion
 from app.infrastructure.atomic import atomic_write_text
+
+# Legacy index/sidecar rows carry fields the trimmed dataclasses no longer
+# declare (folder_id/team_id/shares, comment mentions) — drop them on read.
+_META_FIELDS = {f for f in DocumentMeta.__dataclass_fields__}
+_COMMENT_FIELDS = {f for f in Comment.__dataclass_fields__}
 
 
 class FileDocumentRepository:
@@ -84,12 +83,11 @@ class FileDocumentRepository:
 
     @staticmethod
     def _meta_from(m: dict) -> DocumentMeta:
-        """Index row → DocumentMeta. Rows persisted since ADR-0002 always carry
-        ``link_policy`` (``asdict`` writes every field); truly pre-auth rows
-        lack it and historically behaved as "edit" — pin that here so the
-        dataclass default (now "private", amendment 2026-07-05) never
-        retroactively locks a legacy board out of its own share links."""
-        return DocumentMeta(**{"link_policy": "edit", **m})
+        """Index row → DocumentMeta, ignoring legacy keys (folder_id/team_id/
+        shares) written by the old accounts build. Pre-auth rows lack
+        ``link_policy`` and historically behaved as "edit" — the dataclass
+        default pins that."""
+        return DocumentMeta(**{k: v for k, v in m.items() if k in _META_FIELDS})
 
     # ---- documents ----------------------------------------------------------
     def save(self, doc: Document) -> None:
@@ -127,13 +125,6 @@ class FileDocumentRepository:
     def list(self) -> list[DocumentMeta]:
         idx = self._load_index()
         return [self._meta_from(m) for m in idx["documents"].values()]
-
-    def list_for_user(self, user_id, team_ids) -> list[DocumentMeta]:
-        # Scan-and-filter is fine here: the file adapter is the local-dev
-        # fallback; the Pg adapter answers the same question from indexed
-        # columns/join tables (DB v2 phase 4).
-        team_set = set(team_ids)
-        return [m for m in self.list() if listed_for(m, user_id, team_set)]
 
     def metas_by_ids(self, doc_ids) -> list[DocumentMeta]:
         docs = self._load_index()["documents"]
@@ -196,8 +187,10 @@ class FileDocumentRepository:
         out = []
         for item in self._load_comments(doc_id):
             try:
-                out.append(Comment(**item))
-            except TypeError:  # unknown/missing fields — skip the record
+                out.append(
+                    Comment(**{k: v for k, v in item.items() if k in _COMMENT_FIELDS})
+                )
+            except TypeError:  # missing required fields — skip the record
                 continue
         return out
 
@@ -218,17 +211,6 @@ class FileDocumentRepository:
         drop = set(comment_ids)
         items = [c for c in self._load_comments(doc_id) if c.get("id") not in drop]
         self._write_comments(doc_id, items)
-
-    def mentions_of_user(self, user_id: str, limit: int = 200) -> list[Comment]:
-        # Scan every board's comment sidecar — acceptable in the local-dev
-        # fallback; the Pg adapter uses the mentions fan-out table (P5).
-        out: list[Comment] = []
-        for doc_id in self._load_index()["documents"]:
-            for c in self.list_comments(doc_id):
-                if user_id in c.mentions and c.author_id != user_id:
-                    out.append(c)
-        out.sort(key=lambda c: c.created_at, reverse=True)
-        return out[:limit]
 
     # ---- versions (VersionRepository port) -----------------------------------
     def list_versions(self, doc_id: str) -> list[DocumentVersion]:
@@ -285,19 +267,3 @@ class FileDocumentRepository:
         for vid in version_ids:
             if is_valid_id(vid):
                 (vdir / f"{vid}.json").unlink(missing_ok=True)
-
-    # ---- folders -------------------------------------------------------------
-    def list_folders(self) -> list[Folder]:
-        idx = self._load_index()
-        return [Folder(**f) for f in idx["folders"].values()]
-
-    def save_folder(self, folder: Folder) -> None:
-        idx = self._load_index()
-        idx["folders"][folder.id] = asdict(folder)
-        self._save_index(idx)
-
-    def delete_folder(self, folder_id: str) -> None:
-        idx = self._load_index()
-        if folder_id in idx["folders"]:
-            del idx["folders"][folder_id]
-            self._save_index(idx)

@@ -10,12 +10,11 @@
  *   incoming: init (room state for late joiners) · state (apply to
  *             diagramStore with an echo-suppression flag) · cursor/presence/bye
  *
- * The random guest identity is kept in sessionStorage so each tab is a stable
- * "user" without any login.
+ * The random guest identity is auto-generated once into localStorage — a
+ * stable per-browser "user" without any login (rename via the Share dialog).
  */
 import { create } from "zustand";
 import { useDiagramStore } from "./diagramStore";
-import { useAuthStore } from "./authStore";
 import { pauseHistory } from "./diagramHistory";
 
 export interface Peer {
@@ -52,22 +51,11 @@ export const useCollabStore = create<CollabState>(() => ({
 
 const COLORS = ["#ec4899", "#d97706", "#16a34a", "#0891b2", "#7c3aed", "#dc2626"];
 
-/** Has a guest explicitly chosen a display name for the share-link join?
- * localStorage (not session) — asking the same person their name in every new
- * tab was pure friction. Reads the old sessionStorage key as a migration. */
-export function hasGuestName(): boolean {
-  try {
-    return !!(localStorage.getItem("noddle-user") ?? sessionStorage.getItem("noddle-user"));
-  } catch {
-    return false;
-  }
-}
-
-/** Persist the guest's chosen name+color (share-link join gate). */
+/** Rename this browser's identity (Share dialog); keeps the current color. */
 export function setGuestName(name: string): void {
   const identity = {
     name: name.trim().slice(0, 40) || "Guest",
-    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    color: getIdentity().color,
   };
   try {
     localStorage.setItem("noddle-user", JSON.stringify(identity));
@@ -76,26 +64,31 @@ export function setGuestName(name: string): void {
   }
 }
 
+/** This browser's anonymous identity — auto-generated AND persisted on first
+ * read ("tự tạo session", Excalidraw-style), so drawing needs zero prompts.
+ * Reads the old sessionStorage key as a migration. */
 export function getIdentity(): { name: string; color: string } {
-  // Signed-in identity wins (the server re-asserts it on the ws anyway — a
-  // client can't spoof a teammate); the per-tab guest identity is the fallback.
-  const me = useAuthStore.getState().me;
-  if (me && me.kind === "user" && me.name) {
-    return { name: me.name, color: me.color || "#2563eb" };
-  }
   try {
     const raw = localStorage.getItem("noddle-user") ?? sessionStorage.getItem("noddle-user");
-    if (raw) return JSON.parse(raw) as { name: string; color: string };
+    if (raw) {
+      const v = JSON.parse(raw) as { name?: string; color?: string };
+      if (v && typeof v.name === "string" && v.name) {
+        return { name: v.name, color: v.color || COLORS[0] };
+      }
+    }
   } catch {
     /* ignore */
   }
-  // Ephemeral fallback — NOT persisted, so `hasGuestName()` stays false until
-  // the guest explicitly picks a name at the share-link join gate.
-  const id = Math.random().toString(16).slice(2, 6);
-  return {
-    name: `Guest-${id}`,
+  const identity = {
+    name: `Guest-${Math.random().toString(16).slice(2, 6)}`,
     color: COLORS[Math.floor(Math.random() * COLORS.length)],
   };
+  try {
+    localStorage.setItem("noddle-user", JSON.stringify(identity));
+  } catch {
+    /* storage blocked — a fresh ephemeral identity per read is fine */
+  }
+  return identity;
 }
 
 // ---- connection lifecycle ---------------------------------------------------

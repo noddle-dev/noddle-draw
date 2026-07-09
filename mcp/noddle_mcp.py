@@ -3,16 +3,16 @@
 
 Stdlib-only (urllib + json), stdio transport: newline-delimited JSON-RPC 2.0
 per the Model Context Protocol. The server is a thin wrapper over noddle's
-REST API; identity is an noddle AGENT TOKEN (`noddle_…`) so every edit shows up
-in presence/authorship as the agent itself (ADR-0002).
+REST API. noddle is anonymous (Excalidraw-style): a board's URL/id IS the
+capability, so no token is needed — the agent works on any board id it is
+given and signs its comments with NODDLE_AGENT_NAME.
 
 Env:
-  NODDLE_TOKEN      required — agent token (create one in Account → API tokens;
-                   needs the boards:write scope to edit).
-  NODDLE_BASE_URL   default http://127.0.0.1:8000
+  NODDLE_BASE_URL    default http://127.0.0.1:8000
+  NODDLE_AGENT_NAME  display name for comments (default "MCP agent")
 
 Run (see mcp/README.md for Claude Code registration):
-  NODDLE_TOKEN=noddle_… python3 mcp/noddle_mcp.py
+  python3 mcp/noddle_mcp.py
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 
 BASE = os.environ.get("NODDLE_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-TOKEN = os.environ.get("NODDLE_TOKEN", "")
+AGENT_NAME = os.environ.get("NODDLE_AGENT_NAME", "MCP agent")[:40]
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -35,10 +35,7 @@ def api(method: str, path: str, payload: dict | None = None) -> object:
     req = urllib.request.Request(
         BASE + path,
         method=method,
-        headers={
-            "Authorization": f"Bearer {TOKEN}",
-            "Content-Type": "application/json",
-        },
+        headers={"Content-Type": "application/json"},
         data=json.dumps(payload).encode() if payload is not None else None,
     )
     try:
@@ -54,11 +51,6 @@ def api(method: str, path: str, payload: dict | None = None) -> object:
 # ---- tools ---------------------------------------------------------------------
 
 TOOLS: list[dict] = [
-    {
-        "name": "list_boards",
-        "description": "List the boards this agent can see (id, name, updated_at).",
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
-    },
     {
         "name": "get_board",
         "description": (
@@ -116,8 +108,9 @@ TOOLS: list[dict] = [
     {
         "name": "add_comment",
         "description": (
-            "Comment on a board as this agent. Anchor to a node (node_id), an "
-            "edge (edge_id), or reply to a thread root (parent_id)."
+            "Comment on a board (signed with NODDLE_AGENT_NAME). Anchor to a "
+            "node (node_id), an edge (edge_id), or reply to a thread root "
+            "(parent_id)."
         ),
         "inputSchema": {
             "type": "object",
@@ -135,10 +128,6 @@ TOOLS: list[dict] = [
 
 
 def call_tool(name: str, args: dict) -> str:
-    if name == "list_boards":
-        docs = api("GET", "/api/documents")
-        return json.dumps(docs, ensure_ascii=False)
-
     if name == "get_board":
         doc = api("GET", f"/api/documents/{args['doc_id']}")
         assert isinstance(doc, dict)
@@ -170,7 +159,11 @@ def call_tool(name: str, args: dict) -> str:
         api(
             "PUT",
             f"/api/documents/{args['doc_id']}",
-            {"svg": doc.get("svg") or "", "diagram": args["diagram"]},
+            {
+                "svg": doc.get("svg") or "",
+                "diagram": args["diagram"],
+                "author_name": AGENT_NAME,
+            },
         )
         return json.dumps({"ok": True, "url": f"{BASE}/d/{args['doc_id']}"})
 
@@ -179,7 +172,7 @@ def call_tool(name: str, args: dict) -> str:
         return json.dumps(out, ensure_ascii=False)
 
     if name == "add_comment":
-        body: dict = {"body": args["body"]}
+        body: dict = {"body": args["body"], "guest_name": AGENT_NAME}
         if args.get("parent_id"):
             body["parent_id"] = args["parent_id"]
         elif args.get("node_id"):
@@ -215,9 +208,6 @@ def reply_error(msg_id: object, code: int, message: str) -> None:
 
 
 def main() -> int:
-    if not TOKEN:
-        print("NODDLE_TOKEN is not set (agent token noddle_…).", file=sys.stderr)
-        return 2
     for line in sys.stdin:
         line = line.strip()
         if not line:

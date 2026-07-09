@@ -1,5 +1,5 @@
 /**
- * features/dashboard/Thumbnails — the little diagram previews used on doc cards
+ * features/templates/Thumbnails — the little diagram previews used on doc cards
  * and template cards. Pure decorative SVG, parameterised by an accent colour.
  * No untrusted input.
  *

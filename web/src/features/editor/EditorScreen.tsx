@@ -19,19 +19,14 @@ import { useAppStore } from "../../state/appStore";
 import { startDiagramHistory } from "../../state/diagramHistory";
 import { ContextMenu, type CtxMenuState } from "./ContextMenu";
 import { PageBar } from "./PageBar";
-import {
-  connectCollab,
-  disconnectCollab,
-  hasGuestName,
-  sendCursor,
-} from "../../state/collabStore";
-import { useAuthStore } from "../../state/authStore";
+import { connectCollab, disconnectCollab, sendCursor } from "../../state/collabStore";
+import { rememberBoard } from "../../state/appStore";
+import { api } from "../../shared/api/client";
 import { EditorTopbar } from "./EditorTopbar";
 import { LeftPanel } from "./LeftPanel";
 import { RightPanel } from "./RightPanel";
 import { CanvasCollab } from "./CanvasCollab";
 import { CommentsLayer } from "../comments/CommentsLayer";
-import { GuestNameGate } from "./GuestNameGate";
 import { addImageToBoard, imageFromDataTransfer } from "./pasteImage";
 import { usePagesStore } from "../../state/pagesStore";
 
@@ -42,6 +37,30 @@ function StatusBar() {
   const status = useEditorStore((s) => s.status);
   const kind = useEditorStore((s) => s.statusKind);
   return <div className={`editor-statusbar${kind ? " " + kind : ""}`}>{status}</div>;
+}
+
+/** A /d/{id} deep link that doesn't resolve (deleted / view-restricted). */
+function BoardNotFound() {
+  const startNew = () => {
+    void api.create({ name: "Untitled board" }).then((meta) => {
+      rememberBoard(meta.id, meta.name);
+      useEditorStore.setState({ notFound: false });
+      useAppStore.getState().openInEditor(meta.id, { replace: true });
+    });
+  };
+  return (
+    <div className="board-notfound" role="alert">
+      <div className="board-notfound-card">
+        <h2>Board not found</h2>
+        <p>
+          This board doesn't exist anymore, or its link doesn't allow viewing.
+        </p>
+        <button className="btn primary" onClick={startNew}>
+          Start a new board
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /** Presentation HUD: page x/y + arrows + exit (chrome is CSS-hidden). */
@@ -75,13 +94,8 @@ export function EditorScreen() {
   const pendingSvg = useAppStore((s) => s.pendingSvg);
   const embedMode = useAppStore((s) => s.embedMode);
   const presenting = useAppStore((s) => s.presenting);
+  const notFound = useEditorStore((s) => s.notFound);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
-  const me = useAuthStore((s) => s.me);
-  // A guest (not signed in) joining a share link must pick a display name
-  // before entering the live room. Signed-in users use their profile name.
-  // Embeds never join the room, so they never ask for a name.
-  const [named, setNamed] = useState(hasGuestName());
-  const needsName = !embedMode && me != null && me.kind === "guest" && !named;
 
   // Presentation mode: fullscreen (best-effort) + ←/→ page nav + Esc exits.
   useEffect(() => {
@@ -168,15 +182,15 @@ export function EditorScreen() {
     }
   }, [docId, embedMode]);
 
-  // REAL live collaboration: join the room for this document — but wait until
-  // a guest has entered their name (so presence shows a real name, not a
-  // random anon), per the share-link join gate. Embeds are passive views —
-  // they never join the room (no presence spam from every page load).
+  // REAL live collaboration: join the room for this document. The identity is
+  // auto-generated into localStorage (rename any time in the Share dialog) —
+  // no name gate, drawing starts instantly. Embeds are passive views — they
+  // never join the room (no presence spam from every page load).
   useEffect(() => {
-    if (!docId || needsName || embedMode) return;
+    if (!docId || embedMode) return;
     connectCollab(docId);
     return () => disconnectCollab();
-  }, [docId, needsName, embedMode]);
+  }, [docId, embedMode]);
 
   // Stream the local pointer to the room (content coords, throttled).
   useEffect(() => {
@@ -286,7 +300,7 @@ export function EditorScreen() {
       </div>
       <StatusBar />
       {presenting && <PresentHud />}
-      {needsName && <GuestNameGate onDone={() => setNamed(true)} />}
+      {notFound && <BoardNotFound />}
     </div>
   );
 }

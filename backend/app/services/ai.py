@@ -94,25 +94,20 @@ PROVIDER_DEFAULT_MODELS = {
     "custom": "",
 }
 
-# --- platform credit metering (subscription mode ONLY — BYOK never spends) ---
-# Cost per AI action, in ✦ credits. Vision (image→svg) is by far the heaviest
-# call; the co-editor chat is the lightest. api/ai.py charges these via
-# AuthService.spend_credits before dispatching. These flat prices are the
-# USER-FACING charge (predictable, Figma/Canva-style); the TRUE token cost of
-# every call derives from the pricing catalog (domain/pricing.py — the one
-# baseline price table) and is recorded in the usage ledger, so these flat
-# prices can be recalibrated against real data.
-AI_CREDIT_COSTS = {"image_to_svg": 5, "text_to_diagram": 2, "edit_diagram": 1}
+# BYOK providers accepted from the X-AI-Provider header (api/ai.py). "custom"
+# is any OpenAI-compatible endpoint (OpenRouter/Together/Groq/vLLM/Ollama/…)
+# and requires an explicit api_base.
+AI_PROVIDERS = {"claude", "openai", "gemini", "openrouter", "custom"}
 
 
 @dataclass
 class ProviderSettings:
     """Resolved BYOK transport target for a single AI call.
 
-    ``provider`` ∈ {"claude","openai","gemini"}; ``api_key`` is the user's key
-    in the clear (the AuthService de-obfuscates before handing it here). When a
-    caller passes ``None`` instead of this object, AIService uses the shared
-    Databricks subscription pool (the default/legacy behavior).
+    ``provider`` ∈ AI_PROVIDERS; ``api_key`` is the caller's key in the clear
+    (it arrives per-request in the X-AI-Key header and is never stored). When
+    a caller passes ``None`` instead of this object, AIService uses the shared
+    Databricks pool (the DATABRICKS_* env config).
     ``model`` optionally overrides the provider's default model id ("" ⇒
     ``PROVIDER_DEFAULT_MODELS[provider]``).
     """
@@ -366,6 +361,15 @@ class AIService:
         _extract_usage). Callers (api/ai.py) read it right after a successful
         call to record the usage ledger entry."""
         return getattr(self._usage_local, "value", dict(_EMPTY_USAGE))
+
+    @staticmethod
+    def pool_available() -> bool:
+        """Is the shared Databricks pool configured? (Config presence only —
+        never touches the network; surfaced via GET /api/config so the
+        frontend can offer "Server AI" as a backend.)"""
+        if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
+            return True
+        return bool(os.environ.get("DATABRICKS_CONFIG_PROFILE"))
 
     # --- auth / transport --------------------------------------------------
 

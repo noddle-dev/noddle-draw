@@ -1,191 +1,120 @@
-"""Unit tests for the ADR-0002 authorization lattice (services/auth.py) after
-the 2026-07-05 "private by default" amendment.
+"""The authorization matrix (anonymous-only): ``can(action, meta)``.
 
-Pure in-memory tests: ``can()``/``is_listed()`` only reach the repository via
-``AuthService.team_role`` → ``repo.team_by_id``, so a minimal fake repo is
-enough — no filesystem, no network.
+The board URL is the capability — ``link_policy`` is the whole access model:
+  * "edit"    → view + edit for anyone with the link,
+  * "view"    → view only,
+  * "private" (legacy rows from the accounts era) → denied.
+
+Route-level checks confirm the api layer enforces the same matrix.
 """
 from __future__ import annotations
 
-import time
-
 import pytest
+from fastapi.testclient import TestClient
 
-from app.domain.models import DocumentMeta, Team
-from app.services.auth import GUEST, AuthService, Principal, can, is_listed
+from app.config import Settings
+from app.domain.models import DocumentMeta
+from app.main import create_app
+from app.services.auth import can
 
-OWNER_ID = "aaaaaaaaaaaa"
-EDITOR_ID = "bbbbbbbbbbbb"
-VIEWER_ID = "cccccccccccc"
-STRANGER_ID = "dddddddddddd"
-ADMIN_ID = "eeeeeeeeeeee"
-MEMBER_ID = "ffffffffffff"
-TEAM_ID = "111111111111"
-
-ACTIONS = ("view", "edit", "manage")
+SVG = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
 
 
-class FakeAuthRepo:
-    """Only what can()/is_listed() touch: team lookup."""
-
-    def __init__(self, teams: dict[str, Team] | None = None) -> None:
-        self._teams = teams or {}
-
-    def team_by_id(self, team_id: str) -> Team | None:
-        return self._teams.get(team_id)
-
-
-@pytest.fixture
-def auth() -> AuthService:
-    team = Team(
-        id=TEAM_ID,
-        name="t",
-        created_at=time.time(),
-        members={ADMIN_ID: "admin", MEMBER_ID: "member"},
+def _meta(link_policy: str) -> DocumentMeta:
+    return DocumentMeta(
+        id="a" * 12, name="board", created_at=0.0, updated_at=0.0,
+        link_policy=link_policy,
     )
-    return AuthService(FakeAuthRepo({TEAM_ID: team}))  # type: ignore[arg-type]
 
 
-def meta(**overrides) -> DocumentMeta:
-    base = dict(
-        id="222222222222",
-        name="board",
-        created_at=0.0,
-        updated_at=0.0,
-        owner_id=OWNER_ID,
-        shares={EDITOR_ID: "editor", VIEWER_ID: "viewer"},
-        team_id=TEAM_ID,
-    )
-    base.update(overrides)
-    return DocumentMeta(**base)
+# ---- pure matrix --------------------------------------------------------------
+
+def test_edit_policy_grants_view_and_edit():
+    assert can("view", _meta("edit")) is True
+    assert can("edit", _meta("edit")) is True
 
 
-def user(uid: str) -> Principal:
-    return Principal(kind="user", user_id=uid, name=uid)
+def test_view_policy_grants_view_only():
+    assert can("view", _meta("view")) is True
+    assert can("edit", _meta("view")) is False
 
 
-def perms(p: Principal, m: DocumentMeta, auth: AuthService) -> tuple[bool, bool, bool]:
-    return tuple(can(p, a, m, auth) for a in ACTIONS)  # type: ignore[return-value]
+def test_private_legacy_rows_stay_dark():
+    assert can("view", _meta("private")) is False
+    assert can("edit", _meta("private")) is False
 
 
-# ---- default -------------------------------------------------------------
+def test_owner_id_grants_nothing():
+    meta = _meta("private")
+    meta.owner_id = "someone"
+    assert can("view", meta) is False
 
 
-def test_new_meta_defaults_private():
-    m = DocumentMeta(id="333333333333", name="x", created_at=0, updated_at=0)
-    assert m.link_policy == "private"
+# ---- route level ---------------------------------------------------------------
+
+@pytest.fixture()
+def client(tmp_path) -> TestClient:
+    return TestClient(create_app(Settings(storage_dir=tmp_path)))
 
 
-# ---- owner ----------------------------------------------------------------
+def _create(client: TestClient) -> str:
+    r = client.post("/api/documents/new", json={"name": "b", "svg": SVG})
+    assert r.status_code == 200
+    return r.json()["id"]
 
 
-def test_owner_can_everything_even_private(auth):
-    m = meta(link_policy="private")
-    assert perms(user(OWNER_ID), m, auth) == (True, True, True)
-    assert is_listed(user(OWNER_ID), m, auth)
+def _force_policy(client: TestClient, doc_id: str, policy: str) -> None:
+    """Arrange a stored policy directly through the service (no API knob)."""
+    service = client.app.state.document_service
+    doc = service.get(doc_id)
+    doc.meta.link_policy = policy
+    service._repo.save(doc)  # noqa: SLF001 — test arranging persisted state
 
 
-# ---- per-user shares --------------------------------------------------------
+def test_view_policy_board_rejects_saves(client):
+    doc_id = _create(client)
+    _force_policy(client, doc_id, "view")
+    assert client.get(f"/api/documents/{doc_id}").status_code == 200
+    r = client.put(f"/api/documents/{doc_id}", json={"svg": SVG})
+    assert r.status_code == 403
+    assert client.patch(
+        f"/api/documents/{doc_id}", json={"name": "renamed"}
+    ).status_code == 403
 
 
-def test_share_editor_view_edit_not_manage(auth):
-    m = meta(link_policy="private", team_id=None)
-    assert perms(user(EDITOR_ID), m, auth) == (True, True, False)
-    assert is_listed(user(EDITOR_ID), m, auth)
+def test_private_legacy_board_is_dark(client):
+    doc_id = _create(client)
+    _force_policy(client, doc_id, "private")
+    assert client.get(f"/api/documents/{doc_id}").status_code == 403
+    assert client.get(f"/api/documents/{doc_id}/export.svg").status_code == 403
 
 
-def test_share_viewer_view_only(auth):
-    m = meta(link_policy="private", team_id=None)
-    assert perms(user(VIEWER_ID), m, auth) == (True, False, False)
-    assert is_listed(user(VIEWER_ID), m, auth)
+def test_edit_policy_board_round_trips(client):
+    doc_id = _create(client)
+    r = client.get(f"/api/documents/{doc_id}")
+    assert r.status_code == 200
+    assert r.json()["my_role"] == "editor"
+    assert r.json()["meta"]["link_policy"] == "edit"
+    assert client.put(
+        f"/api/documents/{doc_id}", json={"svg": SVG, "author_name": "Guest-ab12"}
+    ).status_code == 200
 
 
-# ---- team roles ------------------------------------------------------------
+def test_view_policy_reports_viewer_role(client):
+    doc_id = _create(client)
+    _force_policy(client, doc_id, "view")
+    assert client.get(f"/api/documents/{doc_id}").json()["my_role"] == "viewer"
 
 
-def test_team_admin_can_everything(auth):
-    m = meta(link_policy="private", shares={})
-    assert perms(user(ADMIN_ID), m, auth) == (True, True, True)
-    assert is_listed(user(ADMIN_ID), m, auth)
-
-
-def test_team_member_view_edit_not_manage(auth):
-    m = meta(link_policy="private", shares={})
-    assert perms(user(MEMBER_ID), m, auth) == (True, True, False)
-    assert is_listed(user(MEMBER_ID), m, auth)
-
-
-# ---- link_policy fall-through (owned boards) ---------------------------------
-
-
-@pytest.mark.parametrize("who", [user(STRANGER_ID), GUEST], ids=["stranger", "guest"])
-def test_link_private_denies_outsiders(auth, who):
-    m = meta(link_policy="private", shares={}, team_id=None)
-    assert perms(who, m, auth) == (False, False, False)
-    assert not is_listed(who, m, auth)
-
-
-@pytest.mark.parametrize("who", [user(STRANGER_ID), GUEST], ids=["stranger", "guest"])
-def test_link_view_grants_view_only(auth, who):
-    m = meta(link_policy="view", shares={}, team_id=None)
-    assert perms(who, m, auth) == (True, False, False)
-    assert not is_listed(who, m, auth)  # link ≠ discovery
-
-
-@pytest.mark.parametrize("who", [user(STRANGER_ID), GUEST], ids=["stranger", "guest"])
-def test_link_edit_grants_view_edit_never_manage(auth, who):
-    m = meta(link_policy="edit", shares={}, team_id=None)
-    assert perms(who, m, auth) == (True, True, False)
-    assert not is_listed(who, m, auth)
-
-
-# ---- ownerless (legacy) boards — amendment #2 2026-07-05: DENY EVERYTHING ----
-# The stored link_policy of an ownerless board was never an owner's decision
-# (it is the old open default), so it grants nothing. Rescue path:
-# scripts/lockdown_link_policy.py --assign-orphans-to.
-
-
-@pytest.mark.parametrize("who", [user(STRANGER_ID), GUEST], ids=["stranger", "guest"])
-@pytest.mark.parametrize("policy", ["edit", "view", "private"])
-def test_ownerless_denies_all_actions(auth, who, policy):
-    m = meta(owner_id=None, link_policy=policy, shares={}, team_id=None)
-    assert perms(who, m, auth) == (False, False, False)
-
-
-@pytest.mark.parametrize("who", [user(STRANGER_ID), GUEST], ids=["stranger", "guest"])
-@pytest.mark.parametrize("policy", ["edit", "view", "private"])
-def test_ownerless_listed_to_nobody(auth, who, policy):
-    m = meta(owner_id=None, link_policy=policy, shares={}, team_id=None)
-    assert not is_listed(who, m, auth)
-
-
-# ---- agent scope gating -------------------------------------------------------
-
-
-def agent(uid: str, scopes: list[str]) -> Principal:
-    return Principal(kind="agent", user_id=uid, agent_token_id="t", scopes=scopes)
-
-
-def test_agent_of_owner_with_full_scopes(auth):
-    m = meta(link_policy="private")
-    a = agent(OWNER_ID, ["boards:read", "boards:write"])
-    assert perms(a, m, auth) == (True, True, True)
-
-
-def test_agent_read_scope_cannot_edit_even_as_owner(auth):
-    m = meta(link_policy="private")
-    a = agent(OWNER_ID, ["boards:read"])
-    assert perms(a, m, auth) == (True, False, False)
-
-
-def test_agent_without_read_scope_cannot_view(auth):
-    m = meta(link_policy="edit")
-    a = agent(OWNER_ID, ["boards:write"])
-    assert not can(a, "view", m, auth)
-
-
-def test_agent_scopes_do_not_escalate_beyond_owner_rights(auth):
-    # An agent of a stranger gets only what the stranger would (link policy).
-    m = meta(link_policy="view", shares={}, team_id=None)
-    a = agent(STRANGER_ID, ["boards:read", "boards:write"])
-    assert perms(a, m, auth) == (True, False, False)
+def test_removed_account_routes_are_gone(client):
+    assert client.post(
+        "/api/auth/login", json={"email": "a@b.c", "password": "x"}
+    ).status_code in (404, 405)
+    assert client.get("/api/teams").status_code in (404, 405)
+    assert client.post("/api/payments/checkout", json={}).status_code in (404, 405)
+    assert client.get("/api/me/notifications").status_code in (404, 405)
+    assert client.get("/api/documents").status_code in (404, 405)  # no listing
+    doc_id = _create(client)
+    # no delete, no shares, no policy toggle
+    assert client.delete(f"/api/documents/{doc_id}").status_code in (404, 405)
+    assert client.get(f"/api/documents/{doc_id}/shares").status_code in (404, 405)

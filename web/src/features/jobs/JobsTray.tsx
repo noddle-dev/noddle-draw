@@ -7,7 +7,6 @@
  */
 import { useEffect } from "react";
 import { useAppStore } from "../../state/appStore";
-import { useAuthStore } from "../../state/authStore";
 import { useJobsStore } from "../../state/jobsStore";
 
 export function JobsTray() {
@@ -16,13 +15,12 @@ export function JobsTray() {
   const clearFinished = useJobsStore((s) => s.clearFinished);
   const loadHistory = useJobsStore((s) => s.loadHistory);
   const openInEditor = useAppStore((s) => s.openInEditor);
-  const me = useAuthStore((s) => s.me);
-  const signedIn = me?.kind === "user";
+
 
   // merge the server-side history in once we know who's signed in
   useEffect(() => {
-    if (signedIn) void loadHistory();
-  }, [signedIn, loadHistory]);
+    void loadHistory();
+  }, [loadHistory]);
 
   if (jobs.length === 0) return null;
   const active = jobs.filter((j) => j.status === "queued" || j.status === "processing").length;

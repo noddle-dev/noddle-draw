@@ -1,13 +1,13 @@
 /**
- * features/dashboard/templates — REAL template definitions.
+ * features/templates/templates — REAL template definitions.
  *
  * Each template builds an editable board (noddle diagram nodes/edges). Picking
  * one creates a real document via POST /api/documents/new and navigates to its
  * /d/{id} URL — from there everything is the normal live-editable board.
  */
 import type { DiagramEdge, DiagramNode, NodeKind } from "../../editor-core/diagram";
-import { api, ApiError } from "../../shared/api/client";
-import { useAppStore } from "../../state/appStore";
+import { api } from "../../shared/api/client";
+import { rememberBoard, useAppStore } from "../../state/appStore";
 
 export interface TemplateDef {
   id: string;
@@ -714,18 +714,10 @@ export const TEMPLATES: TemplateDef[] = [
  * (page bar) from the first moment, not svg-only docs. */
 export async function createBoard(tpl?: TemplateDef, name?: string): Promise<void> {
   const diagram = tpl ? tpl.build() : { nodes: [], edges: [] };
-  try {
-    const meta = await api.create({
-      name: name ?? (tpl ? tpl.name : "Untitled board"),
-      diagram,
-    });
-    useAppStore.getState().openInEditor(meta.id);
-  } catch (err) {
-    // Board-quota hit → show the upgrade card instead of a raw error string.
-    if (err instanceof ApiError && err.status === 402) {
-      useAppStore.getState().showUpgrade(err.message);
-      return;
-    }
-    throw err;
-  }
+  const meta = await api.create({
+    name: name ?? (tpl ? tpl.name : "Untitled board"),
+    diagram,
+  });
+  rememberBoard(meta.id, meta.name);
+  useAppStore.getState().openInEditor(meta.id);
 }

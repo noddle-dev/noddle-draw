@@ -4,7 +4,8 @@
  * Anchors live in CONTENT coords (or follow a node/edge); rendering maps them
  * to screen through the shared camera each render — same approach as the
  * remote cursors in CanvasCollab. Threads are Figma-style: a root pin, replies
- * one level deep, resolve/unresolve, @mentions picked from the board's people.
+ * one level deep, resolve/unresolve. Authors are anonymous (localStorage
+ * identity) — anyone with edit access may resolve or delete.
  *
  * Comment MODE (armed from the topbar 💬 button) captures the next pointerdown
  * on the canvas host in the CAPTURE phase (the native canvas handlers can't be
@@ -12,14 +13,13 @@
  * turns it into a draft pin: on a node → follows the node; on an edge →
  * follows the edge; empty canvas → a fixed point.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { contentToStage, screenToContent } from "../../editor-core";
 import type { Attachment } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { usePagesStore } from "../../state/pagesStore";
-import { useAuthStore } from "../../state/authStore";
-import { useCommentsStore, type Person } from "../../state/commentsStore";
+import { useCommentsStore } from "../../state/commentsStore";
 import type { CommentAnchor, CommentOut } from "../../shared/api/client";
 
 // ---- helpers ----------------------------------------------------------------
@@ -54,85 +54,36 @@ function attachmentPos(a: Attachment): { x: number; y: number } | null {
   return n ? { x: n.x + n.w / 2, y: n.y + n.h / 2 } : null;
 }
 
-// ---- mention textarea ---------------------------------------------------------
+// ---- comment textarea ---------------------------------------------------------
 
-interface MentionInputProps {
+interface CommentInputProps {
   value: string;
   onChange: (v: string) => void;
-  mentions: string[];
-  onMentionsChange: (ids: string[]) => void;
-  people: Person[];
   placeholder: string;
   autoFocus?: boolean;
   onSubmit: () => void;
   onCancel?: () => void;
 }
 
-/** Textarea with a lightweight "@" picker: typing `@que` pops the people list;
- * picking inserts `@Name ` and records the user id in `mentions`. */
-function MentionInput(props: MentionInputProps) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const [menu, setMenu] = useState<{ query: string; start: number } | null>(null);
-
-  const detectMention = (text: string, caret: number) => {
-    const upto = text.slice(0, caret);
-    const m = /(^|\s)@([\p{L}\p{N}._-]{0,30})$/u.exec(upto);
-    if (!m) return setMenu(null);
-    setMenu({ query: m[2].toLowerCase(), start: caret - m[2].length - 1 });
-  };
-
-  const candidates = menu
-    ? props.people.filter((p) => p.name.toLowerCase().includes(menu.query)).slice(0, 6)
-    : [];
-
-  const pick = (p: Person) => {
-    if (!menu || !ref.current) return;
-    const caret = ref.current.selectionStart ?? props.value.length;
-    const next =
-      props.value.slice(0, menu.start) + `@${p.name} ` + props.value.slice(caret);
-    props.onChange(next);
-    if (!props.mentions.includes(p.id)) {
-      props.onMentionsChange([...props.mentions, p.id]);
-    }
-    setMenu(null);
-    requestAnimationFrame(() => ref.current?.focus());
-  };
-
+function CommentInput(props: CommentInputProps) {
   return (
     <div className="comment-input">
       <textarea
-        ref={ref}
         rows={2}
         value={props.value}
         placeholder={props.placeholder}
         autoFocus={props.autoFocus}
-        onChange={(e) => {
-          props.onChange(e.target.value);
-          detectMention(e.target.value, e.target.selectionStart ?? 0);
-        }}
+        onChange={(e) => props.onChange(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
-            if (menu) setMenu(null);
-            else props.onCancel?.();
+            props.onCancel?.();
             e.stopPropagation();
           } else if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            if (menu && candidates.length) pick(candidates[0]);
-            else props.onSubmit();
+            props.onSubmit();
           }
         }}
       />
-      {menu && candidates.length > 0 && (
-        <div className="mention-menu">
-          {candidates.map((p) => (
-            <button key={p.id} onMouseDown={(e) => { e.preventDefault(); pick(p); }}>
-              <span className="dot" style={{ background: p.color }} />
-              {p.name}
-              <span className="email">{p.email}</span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -141,24 +92,21 @@ function MentionInput(props: MentionInputProps) {
 
 function ThreadCard({ root, at }: { root: CommentOut; at: { x: number; y: number } }) {
   const comments = useCommentsStore((s) => s.comments);
-  const people = useCommentsStore((s) => s.people);
-  const me = useAuthStore((s) => s.me);
   const myRole = useEditorStore((s) => s.myRole);
   const [text, setText] = useState("");
-  const [mentions, setMentions] = useState<string[]>([]);
 
   const replies = comments.filter((c) => c.parent_id === root.id);
   const store = useCommentsStore.getState();
-  const isAuthor = (c: CommentOut) =>
-    me?.kind === "user" && !!c.author_id && me.id === c.author_id;
-  const canResolve = myRole !== "viewer" || isAuthor(root);
+  // Anonymous board: the link is the capability — anyone with edit access
+  // may resolve/delete (there is no server-side author identity).
+  const canModerate = myRole !== "viewer";
+  const canResolve = canModerate;
 
   const send = async () => {
     const body = text.trim();
     if (!body) return;
     setText("");
-    setMentions([]);
-    await store.reply(root.id, body, mentions);
+    await store.reply(root.id, body);
   };
 
   return (
@@ -192,7 +140,7 @@ function ThreadCard({ root, at }: { root: CommentOut; at: { x: number; y: number
                 <div className="meta">
                   <b>{c.author_name}</b>
                   <span>{timeAgo(c.created_at)}</span>
-                  {(isAuthor(c) || myRole === "owner") && (
+                  {canModerate && (
                     <button
                       className="del"
                       title="Delete"
@@ -207,13 +155,10 @@ function ThreadCard({ root, at }: { root: CommentOut; at: { x: number; y: number
             </div>
           ))}
         </div>
-        <MentionInput
+        <CommentInput
           value={text}
           onChange={setText}
-          mentions={mentions}
-          onMentionsChange={setMentions}
-          people={people}
-          placeholder="Reply… (@ to mention someone)"
+          placeholder="Reply…"
           onSubmit={() => void send()}
           onCancel={() => store.openThread(null)}
         />
@@ -225,9 +170,7 @@ function ThreadCard({ root, at }: { root: CommentOut; at: { x: number; y: number
 // ---- draft composer -------------------------------------------------------------
 
 function DraftCard({ at }: { at: { x: number; y: number } }) {
-  const people = useCommentsStore((s) => s.people);
   const [text, setText] = useState("");
-  const [mentions, setMentions] = useState<string[]>([]);
   const store = useCommentsStore.getState();
 
   return (
@@ -236,15 +179,12 @@ function DraftCard({ at }: { at: { x: number; y: number } }) {
       style={{ left: at.x + 20, top: at.y - 8 }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <MentionInput
+      <CommentInput
         value={text}
         onChange={setText}
-        mentions={mentions}
-        onMentionsChange={setMentions}
-        people={people}
-        placeholder="Add a comment… (@ to mention someone)"
+        placeholder="Add a comment…"
         autoFocus
-        onSubmit={() => void store.submitDraft(text, mentions)}
+        onSubmit={() => void store.submitDraft(text)}
         onCancel={() => store.cancelDraft()}
       />
       <div className="actions">
@@ -252,7 +192,7 @@ function DraftCard({ at }: { at: { x: number; y: number } }) {
         <button
           className="btn btn-primary"
           disabled={!text.trim()}
-          onClick={() => void store.submitDraft(text, mentions)}
+          onClick={() => void store.submitDraft(text)}
         >
           Send
         </button>

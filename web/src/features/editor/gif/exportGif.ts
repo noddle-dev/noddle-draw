@@ -31,7 +31,6 @@ import {
   type NodeAnim,
 } from "../../../editor-core/diagram";
 import { useEditorStore } from "../../../state/editorStore";
-import { watermarkOn } from "../../toolbar/watermark";
 import { encodeGif, quantize, type IndexedFrame } from "./gifEncode";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -84,7 +83,7 @@ export async function exportAnimatedGif(
   onProgress: (v: number) => void,
 ): Promise<Blob> {
   const st = useEditorStore.getState();
-  const baseSvg = st.currentBoardSvg({ watermark: watermarkOn() });
+  const baseSvg = st.currentBoardSvg();
   if (!baseSvg) throw new Error("Board is empty — nothing to export.");
   const { w, h } = st.artboard;
 

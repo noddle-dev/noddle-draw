@@ -1,9 +1,10 @@
 /**
  * features/editor/EditorTopbar — the editor's top chrome.
  *
- * REAL: doc name (inline rename via PATCH), undo/redo, export SVG/PNG, save,
- * back-to-dashboard, presence avatars (everyone in the live-collab room), and
- * Share (copies the /d/{id} link — anyone with it joins the same board).
+ * REAL: Boards menu (this browser's recent boards + New board), doc name
+ * (inline rename via PATCH), undo/redo, export SVG/PNG, save, presence
+ * avatars (everyone in the live-collab room), and Share (copies the /d/{id}
+ * link — the link IS the sharing capability, Excalidraw-style).
  */
 import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../../state/editorStore";
@@ -19,14 +20,14 @@ import {
   onCollabName,
 } from "../../state/collabStore";
 import { useDiagramHistory } from "../../state/diagramHistory";
-import { useAuthStore } from "../../state/authStore";
 import { useCommentsStore } from "../../state/commentsStore";
 import { Icon, BrandLogo } from "../../shared/ui";
-import { api, type SharesInfo } from "../../shared/api/client";
+import { api } from "../../shared/api/client";
 import { useExport } from "../toolbar/useExport";
 import { GifExportModal } from "./GifExportModal";
 import { HistoryPanel } from "./HistoryPanel";
-import { MentionsBell } from "../comments/MentionsBell";
+import { TemplatesModal } from "../templates/TemplatesModal";
+import { createBoard } from "../templates/templates";
 import { usePagesStore } from "../../state/pagesStore";
 import { diagramToMermaid } from "../../editor-core/diagram";
 
@@ -61,7 +62,7 @@ function exportMermaid(title: string): void {
   );
 }
 
-/** Lucid-style Share dialog: Individual access + Shareable link toggle. */
+/** Share dialog: your display name + the shareable link (the capability). */
 function ShareDialog({
   docId,
   title,
@@ -71,68 +72,21 @@ function ShareDialog({
   title: string;
   onClose: () => void;
 }) {
-  const [info, setInfo] = useState<SharesInfo | null>(null);
-  const [isOwner, setIsOwner] = useState(true);
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState("editor");
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const linkRef = useRef<HTMLInputElement>(null);
   const shareUrl = `${location.origin}/d/${docId}`;
+  const viewer = useEditorStore((s) => s.myRole === "viewer");
 
-  // Your display name in this room. Signed-in → profile name (read-only here);
-  // guest → editable nickname (updates presence/cursors live).
-  const me = useAuthStore((s) => s.me);
-  const isGuest = !me || me.kind === "guest";
+  // Your display name in this room — editable nickname (updates presence/
+  // cursors live).
   const [nick, setNick] = useState(getIdentity().name);
   const saveNick = () => {
     const n = nick.trim();
-    if (!n || !isGuest) return;
+    if (!n) return;
     setGuestName(n);
-    // reconnect so the server re-broadcasts the new identity to the room
+    // reconnect so the room re-broadcasts the new identity
     disconnectCollab();
     connectCollab(docId);
-  };
-
-  const reload = () =>
-    void api
-      .getShares(docId)
-      .then((i) => { setInfo(i); setIsOwner(true); })
-      .catch(() => setIsOwner(false)); // not owner → link-only view
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(reload, [docId]);
-
-  // Boards are private by default — until the server says otherwise, show
-  // link sharing as OFF (fail-safe; matches the backend default).
-  const linkOn = (info?.link_policy ?? "private") !== "private";
-  const setPolicy = (p: "edit" | "view" | "private") =>
-    void api.patchDoc(docId, { link_policy: p }).then(reload);
-
-  const invite = () => {
-    setError(null);
-    void api
-      .addShare(docId, email.trim(), role)
-      .then(() => { setEmail(""); reload(); })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  };
-
-  // Change a shared user's role — POST /shares upserts by email.
-  const changeRole = (memberEmail: string, newRole: string) => {
-    setError(null);
-    void api
-      .addShare(docId, memberEmail, newRole)
-      .then(reload)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  };
-
-  // Revoke access — confirm first (destructive, can't be undone in one click).
-  const revoke = (memberId: string, name: string) => {
-    if (!window.confirm(`Remove ${name}'s access to "${title}"?`)) return;
-    setError(null);
-    void api
-      .removeShare(docId, memberId)
-      .then(reload)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
   const copy = async () => {
@@ -170,99 +124,18 @@ function ShareDialog({
             className="text-input"
             style={{ flex: 1 }}
             value={nick}
-            disabled={!isGuest}
-            title={isGuest ? "" : "Name comes from your account"}
             onChange={(e) => setNick(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") saveNick(); }}
           />
-          {isGuest && (
-            <button className="btn" disabled={!nick.trim() || nick.trim() === getIdentity().name} onClick={saveNick}>
-              Rename
-            </button>
-          )}
+          <button className="btn" disabled={!nick.trim() || nick.trim() === getIdentity().name} onClick={saveNick}>
+            Rename
+          </button>
         </div>
         <div style={{ borderTop: "1px solid var(--border-faint)", margin: "0 0 14px" }} />
 
-        {/* Individual access */}
-        {isOwner && (
-          <>
-            <div style={{ fontWeight: 650, fontSize: 13.5, marginBottom: 8 }}>Individual access</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input
-                className="text-input"
-                style={{ flex: 1 }}
-                placeholder="Add people by email…"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") invite(); }}
-              />
-              <select className="text-input" style={{ width: 130 }} value={role} onChange={(e) => setRole(e.target.value)}>
-                <option value="editor">Can edit & share</option>
-                <option value="viewer">Can view only</option>
-              </select>
-              <button className="btn btn-primary" onClick={invite}>Invite</button>
-            </div>
-            {error && <p style={{ color: "var(--danger)", fontSize: 12, margin: "0 0 8px" }}>{error}</p>}
-            {/* Owner — always listed first, not removable. */}
-            {info?.owner && (
-              <div className="share-row">
-                <span className="share-person">
-                  <span className="avatar" style={{ width: 22, height: 22, fontSize: 9, background: info.owner.color }}>
-                    {info.owner.name.slice(0, 2).toUpperCase()}
-                  </span>
-                  <span className="share-name">{info.owner.name}</span>
-                </span>
-                <span className="share-owner-badge">Owner</span>
-              </div>
-            )}
-            {info?.shares.map((s) => (
-              <div key={s.id} className="share-row">
-                <span className="share-person">
-                  <span className="avatar" style={{ width: 22, height: 22, fontSize: 9, background: s.color }}>
-                    {s.name.slice(0, 2).toUpperCase()}
-                  </span>
-                  <span className="share-name">{s.name}</span>
-                </span>
-                <select
-                  className="text-input share-role"
-                  value={s.role}
-                  onChange={(e) => changeRole(s.email, e.target.value)}
-                >
-                  <option value="editor">Can edit</option>
-                  <option value="viewer">View only</option>
-                </select>
-                <button
-                  className="btn share-revoke"
-                  title={`Remove ${s.name}`}
-                  onClick={() => revoke(s.id, s.name)}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-            <div style={{ borderTop: "1px solid var(--border-faint)", margin: "14px 0" }} />
-          </>
-        )}
-
-        {/* Shareable link */}
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 650, fontSize: 13.5, flex: 1 }}>Shareable link</div>
-          {isOwner ? (
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--muted)", cursor: "pointer" }}>
-              {linkOn ? "On" : "Off"}
-              <button
-                className={`switch${linkOn ? " on" : ""}`}
-                onClick={() => setPolicy(linkOn ? "private" : "edit")}
-              >
-                <span className="knob" />
-              </button>
-            </label>
-          ) : (
-            <span className="muted" style={{ fontSize: 12 }}>On</span>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: 8, opacity: linkOn || !isOwner ? 1 : 0.45 }}>
+        {/* Shareable link — always on: the URL IS the capability. */}
+        <div style={{ fontWeight: 650, fontSize: 13.5, marginBottom: 10 }}>Shareable link</div>
+        <div style={{ display: "flex", gap: 8 }}>
           <input
             ref={linkRef}
             className="text-input"
@@ -272,37 +145,14 @@ function ShareDialog({
             onFocus={(e) => e.currentTarget.select()}
             onClick={(e) => e.currentTarget.select()}
           />
-          {linkOn || !isOwner ? (
-            <button className={`btn ${copied ? "" : "btn-primary"}`} onClick={() => void copy()}>
-              {copied ? "✓ Copied" : "Copy"}
-            </button>
-          ) : (
-            <button className="btn btn-primary" onClick={() => setPolicy("edit")}>
-              Turn on shareable link
-            </button>
-          )}
+          <button className={`btn ${copied ? "" : "btn-primary"}`} onClick={() => void copy()}>
+            {copied ? "✓ Copied" : "Copy"}
+          </button>
         </div>
-
-        {isOwner && linkOn && (
-          <div className="prop-row" style={{ marginTop: 10 }}>
-            <span className="lbl" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              🌐 Anyone with the link
-            </span>
-            <select
-              className="text-input"
-              style={{ width: 150, fontSize: 12.5 }}
-              value={info?.link_policy ?? "private"}
-              onChange={(e) => setPolicy(e.target.value as "edit" | "view")}
-            >
-              <option value="edit">Can edit & share</option>
-              <option value="view">Can view only</option>
-            </select>
-          </div>
-        )}
         <p className="muted" style={{ fontSize: 12, margin: "10px 0 0", lineHeight: 1.45 }}>
-          {linkOn || !isOwner
-            ? `Anyone with the link can ${(info?.link_policy ?? "private") === "view" ? "view" : "co-edit in realtime"} — no sign-in required.`
-            : "Link sharing is off — only people invited by name can access this board."}
+          {viewer
+            ? "Anyone with the link can view this board — no sign-up required."
+            : "Anyone with the link can co-edit in realtime — no sign-up required. Keep it private if the board is."}
         </p>
       </div>
     </div>
@@ -350,14 +200,70 @@ function Presence() {
   );
 }
 
-export function EditorTopbar() {
-  const go = useAppStore((s) => s.go);
+/** Boards menu: this browser's recent boards + New board / Templates / AI. */
+function BoardsMenu({ onClose }: { onClose: () => void }) {
+  const docs = useEditorStore((s) => s.docs);
+  const activeId = useEditorStore((s) => s.docId);
+  useEffect(() => {
+    void useEditorStore.getState().refreshDocs();
+  }, []);
+  return (
+    <div>
+      <div className="menu-backdrop" onClick={onClose} />
+      <div className="menu-pop" style={{ width: 240, top: 42, left: 8 }}>
+        <div className="menu-body">
+          <div
+            className="menu-row"
+            onClick={() => { onClose(); void createBoard(); }}
+          >
+            <span className="ico">＋</span>
+            <span style={{ flex: 1 }}>New board</span>
+          </div>
+          <div
+            className="menu-row"
+            onClick={() => { onClose(); useAppStore.getState().setTplModal(true); }}
+          >
+            <span className="ico">▦</span>
+            <span style={{ flex: 1 }}>Templates…</span>
+          </div>
+          <div
+            className="menu-row"
+            onClick={() => { onClose(); useAppStore.getState().startNewWithAI(); }}
+          >
+            <span className="ico">✦</span>
+            <span style={{ flex: 1 }}>Generate with AI</span>
+          </div>
+          {docs.length > 0 && (
+            <div className="muted" style={{ fontSize: 11, padding: "8px 10px 2px" }}>
+              Recent on this browser
+            </div>
+          )}
+          {docs.slice(0, 10).map((d) => (
+            <div
+              key={d.id}
+              className="menu-row"
+              style={d.id === activeId ? { fontWeight: 650 } : undefined}
+              onClick={() => {
+                onClose();
+                if (d.id !== activeId) useAppStore.getState().openInEditor(d.id);
+              }}
+            >
+              <span className="ico">◇</span>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {d.name}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
+export function EditorTopbar() {
   const docId = useEditorStore((s) => s.docId);
   const docName = useEditorStore((s) => s.docName);
   const myRole = useEditorStore((s) => s.myRole);
-  const docOwner = useEditorStore((s) => s.docOwner);
-  const me = useAuthStore((s) => s.me);
   // Undo/redo availability spans BOTH histories (SVG content + diagram layer).
   const svgCanUndo = useEditorStore((s) => s.canUndo);
   const svgCanRedo = useEditorStore((s) => s.canRedo);
@@ -429,20 +335,25 @@ export function EditorTopbar() {
   };
 
   const [shareOpen, setShareOpen] = useState(false);
+  const [boardsOpen, setBoardsOpen] = useState(false);
+  const tplModalOpen = useAppStore((s) => s.tplModalOpen);
 
   return (
     <div className="editor-topbar">
-      <button className="editor-logo" title="Back to dashboard" onClick={() => go("dashboard")}>
+      <button className="editor-logo" title="Boards" onClick={() => setBoardsOpen((v) => !v)}>
         <span className="brand-mark"><BrandLogo /></span>
       </button>
-      <button
-        className="btn btn-ghost"
-        title="Back to dashboard"
-        onClick={() => go("dashboard")}
-        style={{ padding: "5px 10px", gap: 5, fontWeight: 600, color: "var(--text-2)" }}
-      >
-        <Icon name="back" size={16} /> Back
-      </button>
+      <div style={{ position: "relative" }}>
+        <button
+          className="btn btn-ghost"
+          title="Your boards (this browser)"
+          onClick={() => setBoardsOpen((v) => !v)}
+          style={{ padding: "5px 10px", gap: 5, fontWeight: 600, color: "var(--text-2)" }}
+        >
+          Boards ▾
+        </button>
+        {boardsOpen && <BoardsMenu onClose={() => setBoardsOpen(false)} />}
+      </div>
       <span className="crumb-sep">/</span>
       {editingName ? (
         <input
@@ -466,19 +377,6 @@ export function EditorTopbar() {
           {title}
         </button>
       )}
-      {docOwner && (
-        <span
-          className="owner-chip"
-          title={`Owned by ${docOwner.name}`}
-        >
-          <span className="avatar owner-chip-avatar" style={{ background: docOwner.color }}>
-            {docOwner.name.slice(0, 2).toUpperCase()}
-          </span>
-          <span className="owner-chip-text">
-            {me?.kind === "user" && me.id === docOwner.id ? "You" : docOwner.name}
-          </span>
-        </span>
-      )}
       {diagramMode && <span className="pill pill-ai">✦ AI-drafted</span>}
       {myRole === "viewer" && (
         <span className="pill" style={{ background: "var(--panel-2)", color: "var(--muted)" }}>
@@ -492,8 +390,6 @@ export function EditorTopbar() {
       </div>
 
       <div className="spacer" />
-
-      <MentionsBell />
 
       <button
         className="btn"
@@ -598,6 +494,7 @@ export function EditorTopbar() {
       {shareOpen && docId && (
         <ShareDialog docId={docId} title={title} onClose={() => setShareOpen(false)} />
       )}
+      {tplModalOpen && <TemplatesModal />}
     </div>
   );
 }

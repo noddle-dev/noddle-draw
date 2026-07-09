@@ -1,0 +1,67 @@
+# CI → Railway deploy (self-contained).
+#
+# noddle-draw is OPEN SOURCE, so unlike the private Noddle core repos it does
+# not call the central reusable workflow (noddle_artifact is private — forks
+# couldn't resolve it). The logic below mirrors that workflow 1:1 and follows
+# the same governance (harness/deployment/README.md in noddle_artifact):
+#   * Railway project = repo name (noddle-draw); service = draw-web.
+#   * RAILWAY_TOKEN repo secret = Railway PROJECT token (never account token).
+#   * Railway auto-deploy from GitHub stays DISABLED — deploys go through this
+#     gate only (tests green → deploy).
+# Forks: the deploy job is repo-guarded and skips without the secret; the test
+# job runs everywhere.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Backend tests
+        run: |
+          pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+          python -m pytest backend/tests -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend typecheck + build
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+  deploy:
+    needs: test
+    if: github.repository == 'noddle-dev/noddle-draw' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ["draw-web"]
+    concurrency:
+      group: railway-${{ github.repository }}-production-${{ matrix.service }}
+      cancel-in-progress: false
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI (pinned)
+        run: npm install -g @railway/cli@5.23.3
+
+      - name: Deploy ${{ matrix.service }}
+        run: railway up --service "${{ matrix.service }}" --environment production --ci

@@ -9,12 +9,7 @@
  * page load is suppressed from the normal change-subscriber).
  */
 import { useEffect, useMemo, useState } from "react";
-import {
-  api,
-  type AuditEvent,
-  type VersionMeta,
-  type VersionOut,
-} from "../../shared/api/client";
+import { api, type VersionMeta, type VersionOut } from "../../shared/api/client";
 import { useEditorStore } from "../../state/editorStore";
 import { broadcastDiagramNow } from "../../state/collabStore";
 
@@ -31,16 +26,10 @@ export function HistoryPanel({ docId, onClose }: { docId: string; onClose: () =>
   const [versions, setVersions] = useState<VersionMeta[] | null>(null);
   const [selected, setSelected] = useState<VersionOut | null>(null);
   const [busy, setBusy] = useState(false);
-  // Owner-visible audit trail (#22) — 403s (non-owners) just hide the section.
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [auditOpen, setAuditOpen] = useState(false);
 
   useEffect(() => {
     void api.listVersions(docId).then(setVersions).catch(() => setVersions([]));
-    if (myRole === "owner") {
-      void api.docAudit(docId).then(setAudit).catch(() => setAudit([]));
-    }
-  }, [docId, myRole]);
+  }, [docId]);
 
   const previewUrl = useMemo(
     () =>
@@ -101,28 +90,6 @@ export function HistoryPanel({ docId, onClose }: { docId: string; onClose: () =>
               </button>
             ))}
           </div>
-          {audit.length > 0 && (
-            <div className="audit-block">
-              <button className="pgroup-head" onClick={() => setAuditOpen((v) => !v)}>
-                <span className="chev">{auditOpen ? "▾" : "▸"}</span>
-                <span className="nm">Activity log</span>
-                <span className="ct">{audit.length}</span>
-              </button>
-              {auditOpen && (
-                <div className="audit-list">
-                  {audit.map((e, i) => (
-                    <div key={i} className="audit-row">
-                      <span className="when">{fmtTime(e.ts)}</span>
-                      <span className="what">
-                        <b>{e.actor_name}</b> · {e.action}
-                        {e.detail ? ` — ${e.detail}` : ""}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
           {selected && previewUrl && (
             <div className="history-preview">
               <img src={previewUrl} alt="Version preview" />

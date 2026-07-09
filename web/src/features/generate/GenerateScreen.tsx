@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "../../shared/ui";
-import { api, type AiBackendChoice } from "../../shared/api/client";
+import { api } from "../../shared/api/client";
 import { aiErrorMessage } from "../../shared/aiError";
 import { useAppStore } from "../../state/appStore";
 import { useDiagramStore } from "../../state/diagramStore";
@@ -44,21 +44,11 @@ export function GenerateScreen() {
   const genMode = useAppStore((s) => s.genMode);
   const seedPrompt = useAppStore((s) => s.seedPrompt);
   const setGenMode = useAppStore((s) => s.setGenMode);
-  const go = useAppStore((s) => s.go);
   const loadDiagram = useDiagramStore((s) => s.loadDiagram);
 
   const [prompt, setPrompt] = useState(seedPrompt);
   const [sketchStyle, setSketchStyle] = useState(SKETCH_STYLES[0]);
   const [sketchPrompt, setSketchPrompt] = useState("");
-  // Per-upload billing pick — remembered per browser; "" until BackendSelect
-  // mirrors the account mode (or heals a stale stored profile id).
-  const [aiBackend, setAiBackendState] = useState<AiBackendChoice>(
-    () => (localStorage.getItem("noddle.aiBackend") as AiBackendChoice) ?? "",
-  );
-  const setAiBackend = (v: AiBackendChoice) => {
-    setAiBackendState(v);
-    localStorage.setItem("noddle.aiBackend", v);
-  };
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -106,19 +96,19 @@ export function GenerateScreen() {
   // file never locks the app; the enrichment prompt rides along with it.
   const onSketchFile = (file: File) => {
     setError(null);
-    useJobsStore.getState().enqueueImageJob(file, sketchPrompt, aiBackend);
+    useJobsStore.getState().enqueueImageJob(file, sketchPrompt);
   };
 
   return (
     <div className="gen">
       <div className="gen-topbar">
-        <button className="gen-logo" onClick={() => go("dashboard")}>
+        <button className="gen-logo" onClick={() => useAppStore.getState().bootHome()}>
           <span className="brand-mark"><BrandLogo /></span> NODDLE
         </button>
         <span className="crumb-sep">/</span>
         <span className="crumb-txt">New diagram</span>
         <div className="spacer" />
-        <button className="btn" onClick={() => go("dashboard")}>Cancel</button>
+        <button className="btn" onClick={() => useAppStore.getState().bootHome()}>Cancel</button>
       </div>
 
       <div className="gen-scroll">
@@ -188,7 +178,7 @@ export function GenerateScreen() {
                   onChange={(e) => setSketchPrompt(e.target.value)}
                 />
                 <div className="gen-card-foot">
-                  <BackendSelect value={aiBackend} onChange={setAiBackend} />
+                  <BackendSelect />
                 </div>
               </div>
               <div className="dropzone">

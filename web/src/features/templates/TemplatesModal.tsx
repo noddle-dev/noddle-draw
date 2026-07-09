@@ -1,5 +1,5 @@
 /**
- * features/dashboard/TemplatesModal — Lucid-style template gallery.
+ * features/templates/TemplatesModal — Lucid-style template gallery.
  *
  * Layout mirrors Lucid: header (title + search + ✕), a left category RAIL with
  * hand-drawn doodle icons, a "Create a diagram with AI" prompt box (routes to the

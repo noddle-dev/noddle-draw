@@ -1,10 +1,11 @@
 /**
  * state/appStore — the shell state (Zustand).
  *
- * Owns navigation between the three product screens (dashboard → generate →
- * editor) with real URL sync (/d/{docId} is the shareable address of a board),
- * the dashboard's server-backed folders, the Templates picker modal, the
- * generate flow, editor panel tabs and page settings.
+ * Owns navigation between the two product screens (editor ↔ generate) with
+ * real URL sync (/d/{docId} is the shareable address of a board), the
+ * Templates picker modal, the generate flow, editor panel tabs and page
+ * settings. `/` is Excalidraw-style: it reopens the browser's most recent
+ * board (localStorage) or auto-creates a fresh one.
  *
  * It is deliberately separate from editorStore/diagramStore, which remain the
  * source of truth for the REAL editing engine (DOM, camera, selection, history)
@@ -12,14 +13,10 @@
  * stores and wire real actions themselves.
  */
 import { create } from "zustand";
-import { api, type FolderOut } from "../shared/api/client";
-import { useAuthStore } from "./authStore";
+import { api } from "../shared/api/client";
 import { getIdentity } from "./collabStore";
 
-export type View = "dashboard" | "generate" | "editor" | "game" | "settings";
-export type SettingsTab = "profile" | "credits" | "usage" | "ai" | "tokens" | "teams";
-export type GameType = "draw" | "trivia" | "wordbomb";
-export type DashPage = "home" | "templates" | "shared" | "folder" | "games";
+export type View = "generate" | "editor";
 export type GenMode = "text" | "sketch" | "mermaid";
 export type LeftTab = "shapes" | "layers";
 export type RightTab = "props" | "claude";
@@ -50,7 +47,8 @@ export interface ChatSession {
 }
 
 /**
- * Selectable AI models for a chat session. The value is the Databricks
+ * Selectable AI models for a chat session — POOL MODE ONLY (with a client-side
+ * API key the model comes from the key config). The value is the Databricks
  * serving-endpoint name (the backend whitelists names starting with
  * "databricks-" and otherwise falls back to its default endpoint).
  */
@@ -65,6 +63,72 @@ interface BoardChats {
   activeId: string;
 }
 
+// ---- last-board persistence (the Excalidraw-style "/" behavior) -------------
+
+const LAST_BOARD_KEY = "noddle.lastBoardId";
+const RECENTS_KEY = "noddle.recentBoards";
+const RECENTS_CAP = 20;
+
+export interface RecentBoard {
+  id: string;
+  name: string;
+  at: number;
+}
+
+export function lastBoardId(): string | null {
+  try {
+    const id = localStorage.getItem(LAST_BOARD_KEY);
+    return id && /^[0-9a-f]{12}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearLastBoardId(): void {
+  try {
+    localStorage.removeItem(LAST_BOARD_KEY);
+  } catch {
+    /* storage blocked */
+  }
+}
+
+export function recentBoards(): RecentBoard[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (r): r is RecentBoard =>
+        r && typeof r.id === "string" && /^[0-9a-f]{12}$/.test(r.id),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Remember the board this browser is working on (drives `/` + the Boards menu). */
+export function rememberBoard(id: string, name: string): void {
+  try {
+    localStorage.setItem(LAST_BOARD_KEY, id);
+    const rest = recentBoards().filter((r) => r.id !== id);
+    const next = [{ id, name, at: Date.now() }, ...rest].slice(0, RECENTS_CAP);
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+  } catch {
+    /* storage blocked — "/" will just create fresh boards */
+  }
+}
+
+export function forgetBoard(id: string): void {
+  try {
+    if (localStorage.getItem(LAST_BOARD_KEY) === id) clearLastBoardId();
+    localStorage.setItem(
+      RECENTS_KEY,
+      JSON.stringify(recentBoards().filter((r) => r.id !== id)),
+    );
+  } catch {
+    /* storage blocked */
+  }
+}
+
 /** Push a URL without reloading; no-op when already there. */
 function pushUrl(path: string) {
   if (typeof history !== "undefined" && location.pathname !== path) {
@@ -72,37 +136,23 @@ function pushUrl(path: string) {
   }
 }
 
-/** URL for a dashboard page (home lives at "/"). Folder uses /folder/{id}. */
-function dashPath(page: DashPage): string {
-  switch (page) {
-    case "templates": return "/templates";
-    case "shared": return "/shared";
-    case "games": return "/games";
-    default: return "/"; // home (folder is pushed by openFolder with its id)
+/** Replace the URL (boot redirects: Back should leave the site, not bounce). */
+function replaceUrl(path: string) {
+  if (typeof history !== "undefined" && location.pathname !== path) {
+    history.replaceState({}, "", path);
   }
 }
 
 interface AppState {
   // ---- navigation ----
   view: View;
-  dashPage: DashPage;
-  curFolder: FolderOut | null;
-  profileOpen: boolean;
   /** Doc id to load once the editor's canvas has mounted. */
   pendingDocId: string | null;
   /** Raw SVG (e.g. from image→SVG) to load once the canvas has mounted. */
   pendingSvg: string | null;
-  /** Active game room id (view === "game"). */
-  gameRoomId: string | null;
-  /** Which game the active room is (routes to the right room component). */
-  gameType: GameType;
-  /** Folder id from a /folder/{id} deep link, resolved once folders load. */
-  pendingFolderId: string | null;
 
-  // ---- dashboard (folders are REAL — server-backed) ----
-  folders: FolderOut[];
-  tplCat: string;
   /** Lucid-style Templates picker modal (New board). */
+  tplCat: string;
   tplModalOpen: boolean;
 
   // ---- generate ----
@@ -134,41 +184,15 @@ interface AppState {
   /** Messages waiting in the sequential edit queue (input never locks). */
   queuedChats: number;
 
-  /** Why the login screen is being shown (e.g. "Sign in to view this board."). */
-  authNotice: string | null;
-  /** Board to reopen automatically once the user signs in (guest hit a 401/403). */
-  authRetryDocId: string | null;
-
   // ---- actions ----
   go: (view: View) => void;
-  /** Route a signed-out user to the login screen with a contextual message. */
-  promptSignIn: (notice: string, retryDocId?: string) => void;
-  clearAuthPrompt: () => void;
-  /** Which settings section is open (full-page /settings route). */
-  settingsTab: SettingsTab;
-  /** Open the full-page settings screen at an optional section. */
-  openSettings: (tab?: SettingsTab) => void;
-  /** Upgrade prompt: the 402 reason to show, or null when the card is closed. */
-  upgradeReason: string | null;
-  showUpgrade: (reason: string) => void;
-  hideUpgrade: () => void;
-  /** Open a multiplayer game room at /play/{roomId} (draw) or /play/{type}/{roomId}. */
-  openGame: (roomId: string, gameType?: GameType) => void;
-  openInEditor: (docId: string) => void;
+  /** `/` behavior: reopen the last board, else create a fresh one. */
+  bootHome: () => void;
+  openInEditor: (docId: string, opts?: { replace?: boolean }) => void;
   openSvgInEditor: (svg: string) => void;
   consumePending: () => void;
-  setDashPage: (p: DashPage) => void;
-  openFolder: (f: FolderOut) => void;
-  toggleProfile: () => void;
   setTplCat: (c: string) => void;
   setTplModal: (open: boolean) => void;
-
-  loadFolders: () => Promise<void>;
-  createFolder: (name: string) => Promise<void>;
-  renameFolder: (id: string, name: string) => Promise<void>;
-  /** Set a folder's color tag (keeps its current name). */
-  setFolderColor: (id: string, color: string) => Promise<void>;
-  deleteFolder: (id: string) => Promise<void>;
 
   setGenMode: (m: GenMode) => void;
   startNewWithAI: (opts?: { mode?: GenMode; prompt?: string }) => void;
@@ -198,17 +222,10 @@ interface AppState {
 /**
  * Chat storage key — ISOLATED per (identity, board). Chats never travel over
  * collab (only diagram state does), so collaborators already have separate
- * conversations; folding the identity in also stops one person's chat from
- * showing after an account switch in the same browser tab.
+ * conversations.
  */
-export const chatKey = (docId: string | null): string => {
-  const me = useAuthStore.getState().me;
-  const who =
-    me && me.kind === "user" && me.id
-      ? `u:${me.id}`
-      : `g:${getIdentity().name}`; // guest → per-tab name
-  return `${who}::${docId ?? "__scratch__"}`;
-};
+export const chatKey = (docId: string | null): string =>
+  `g:${getIdentity().name}::${docId ?? "__scratch__"}`;
 
 function mintSessionId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID().slice(0, 8);
@@ -251,22 +268,11 @@ function persistChats(chats: Record<string, BoardChats>) {
   }
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
-  view: "dashboard",
-  authNotice: null,
-  authRetryDocId: null,
-  settingsTab: "profile",
-  upgradeReason: null,
-  gameRoomId: null,
-  gameType: "draw",
-  pendingFolderId: null,
-  dashPage: "home",
-  curFolder: null,
-  profileOpen: false,
+export const useAppStore = create<AppState>((set) => ({
+  view: "editor",
   pendingDocId: null,
   pendingSvg: null,
 
-  folders: [],
   tplCat: "All",
   tplModalOpen: false,
 
@@ -291,93 +297,56 @@ export const useAppStore = create<AppState>((set, get) => ({
   queuedChats: 0,
 
   go: (view) => {
-    // Returning to the dashboard restores the URL of the page you were on
-    // (so Back from a board/game lands on the right tab, and reload keeps it).
-    if (view === "dashboard") pushUrl(dashPath(get().dashPage));
-    else if (view === "generate") pushUrl("/");
-    set({ view, profileOpen: false });
+    if (view === "generate") pushUrl("/generate");
+    set({ view });
   },
-  openGame: (roomId, gameType = "draw") => {
-    pushUrl(gameType === "draw" ? `/play/${roomId}` : `/play/${gameType}/${roomId}`);
-    set({ view: "game", gameRoomId: roomId, gameType, profileOpen: false });
+  bootHome: () => {
+    const last = lastBoardId();
+    if (last) {
+      // Straight into the board you were drawing (Excalidraw semantics).
+      replaceUrl(`/d/${last}`);
+      set({ view: "editor", pendingDocId: last, pendingSvg: null });
+      return;
+    }
+    // First visit: mint a board, then land in it (replace — Back leaves the
+    // site instead of bouncing between "/" and "/d/{id}").
+    set({ view: "editor", pendingDocId: null, pendingSvg: null });
+    void api
+      .create({ name: "Untitled board" })
+      .then((meta) => {
+        rememberBoard(meta.id, meta.name);
+        replaceUrl(`/d/${meta.id}`);
+        set({ pendingDocId: meta.id });
+      })
+      .catch(() => {
+        /* backend down — the editor shows an empty scratch board */
+      });
   },
-  openSettings: (tab = "profile") => {
-    pushUrl("/settings");
-    set({ view: "settings", settingsTab: tab, profileOpen: false });
-  },
-  showUpgrade: (upgradeReason) => set({ upgradeReason }),
-  hideUpgrade: () => set({ upgradeReason: null }),
-  openInEditor: (docId) => {
-    pushUrl(`/d/${docId}`);
+  openInEditor: (docId, opts) => {
+    (opts?.replace ? replaceUrl : pushUrl)(`/d/${docId}`);
     set({
       view: "editor",
       pendingDocId: docId,
       pendingSvg: null,
-      profileOpen: false,
       tplModalOpen: false,
     });
   },
   openSvgInEditor: (svg) =>
-    set({ view: "editor", pendingSvg: svg, pendingDocId: null, profileOpen: false }),
+    set({ view: "editor", pendingSvg: svg, pendingDocId: null }),
   consumePending: () => set({ pendingDocId: null, pendingSvg: null }),
-  setDashPage: (dashPage) => {
-    pushUrl(dashPath(dashPage));
-    set({ dashPage, curFolder: null, profileOpen: false });
-  },
-  openFolder: (curFolder) => {
-    pushUrl(`/folder/${curFolder.id}`);
-    set({ dashPage: "folder", curFolder });
-  },
-  toggleProfile: () => set((s) => ({ profileOpen: !s.profileOpen })),
-  promptSignIn: (authNotice, retryDocId) => {
-    pushUrl("/");
-    set({
-      view: "dashboard", // guests see the LoginScreen at this view (App.tsx gate)
-      authNotice,
-      authRetryDocId: retryDocId ?? null,
-      profileOpen: false,
-    });
-  },
-  clearAuthPrompt: () => set({ authNotice: null, authRetryDocId: null }),
   setTplCat: (tplCat) => set({ tplCat }),
   setTplModal: (tplModalOpen) => set({ tplModalOpen }),
 
-  async loadFolders() {
-    try {
-      set({ folders: await api.listFolders() });
-    } catch {
-      set({ folders: [] });
-    }
-  },
-  async createFolder(name) {
-    await api.createFolder(name);
-    await get().loadFolders();
-  },
-  async renameFolder(id, name) {
-    await api.renameFolder(id, name);
-    await get().loadFolders();
-  },
-  async setFolderColor(id, color) {
-    const f = get().folders.find((x) => x.id === id);
-    await api.renameFolder(id, f?.name ?? "Folder", color);
-    await get().loadFolders();
-  },
-  async deleteFolder(id) {
-    await api.deleteFolder(id);
-    const cur = get().curFolder;
-    if (cur?.id === id) set({ dashPage: "home", curFolder: null });
-    await get().loadFolders();
-  },
-
   setGenMode: (genMode) => set({ genMode }),
-  startNewWithAI: (opts) =>
+  startNewWithAI: (opts) => {
+    pushUrl("/generate");
     set({
       view: "generate",
-      profileOpen: false,
       tplModalOpen: false,
       genMode: opts?.mode ?? "text",
       seedPrompt: opts?.prompt ?? "",
-    }),
+    });
+  },
   startGenerating: (genTotal) => set({ generating: true, genStep: 0, genTotal }),
   setGenStep: (genStep) => set({ genStep }),
   stopGenerating: () => set({ generating: false, genStep: 0 }),
@@ -463,9 +432,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 export function applyLocation() {
   const m = location.pathname.match(/^\/d\/([0-9a-f]{12})$/);
   const em = location.pathname.match(/^\/embed\/([0-9a-f]{12})$/);
-  const g = location.pathname.match(/^\/play\/([0-9a-f]{12})$/);
-  const gt = location.pathname.match(/^\/play\/(trivia|wordbomb)\/([0-9a-f]{12})$/);
-  const fo = location.pathname.match(/^\/folder\/([0-9a-f]{12})$/);
   if (em) {
     // Read-only iframe view: same editor shell, chrome hidden via embedMode.
     useAppStore.setState({
@@ -480,23 +446,10 @@ export function applyLocation() {
       pendingDocId: m[1],
       pendingSvg: null,
     });
-  } else if (gt) {
-    useAppStore.setState({ view: "game", gameRoomId: gt[2], gameType: gt[1] as GameType });
-  } else if (g) {
-    useAppStore.setState({ view: "game", gameRoomId: g[1], gameType: "draw" });
-  } else if (location.pathname === "/templates") {
-    useAppStore.setState({ view: "dashboard", dashPage: "templates", curFolder: null });
-  } else if (location.pathname === "/shared") {
-    useAppStore.setState({ view: "dashboard", dashPage: "shared", curFolder: null });
-  } else if (location.pathname === "/games") {
-    useAppStore.setState({ view: "dashboard", dashPage: "games", curFolder: null });
-  } else if (location.pathname === "/settings") {
-    useAppStore.setState({ view: "settings" });
-  } else if (fo) {
-    // Folder deep link — mark the page + remember the id; DashboardScreen
-    // resolves it to the real folder once the folder list has loaded.
-    useAppStore.setState({ view: "dashboard", dashPage: "folder", pendingFolderId: fo[1] });
+  } else if (location.pathname === "/generate") {
+    useAppStore.setState({ view: "generate" });
   } else {
-    useAppStore.setState({ view: "dashboard", dashPage: "home", curFolder: null });
+    // "/" (and anything unknown): reopen the last board or mint a fresh one.
+    useAppStore.getState().bootHome();
   }
 }

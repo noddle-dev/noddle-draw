@@ -1498,3 +1498,15 @@ code { background: var(--panel-2); border: 1px solid var(--border); padding: 1px
   border-radius: 50%;
   vertical-align: middle;
 }
+
+/* ---- board-not-found (a /d/{id} deep link that doesn't resolve) ------------ */
+.board-notfound {
+  position: fixed; inset: 0; z-index: 90; background: rgba(244, 245, 247, .92);
+  backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center;
+}
+.board-notfound-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-3xl);
+  padding: 30px 34px; box-shadow: var(--shadow-pop); width: 380px; text-align: center;
+}
+.board-notfound-card h2 { margin: 0 0 8px; font-size: 18px; }
+.board-notfound-card p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }

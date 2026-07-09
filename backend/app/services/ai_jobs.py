@@ -8,12 +8,14 @@ small worker pool converts in the background (several users run in parallel),
 and the finished job carries the created board's ``doc_id`` — so history
 survives reloads and "open the board" is one click.
 
-Persistence follows the notifications pattern (2026-07-06 rule): job RECORDS
-go to Postgres via ``PgAIJobStore`` when a pool exists, else the JSON file
-fallback. The image BYTES are in-memory only (single-instance app, like the
-collab rooms): a job that was queued/processing when the process died can
-never finish, so reads lazily mark any running-status job unknown to this
-process as failed ("server restarted").
+Persistence: job RECORDS go to Postgres via ``PgAIJobStore`` when a pool
+exists, else the JSON file fallback. The image BYTES are in-memory only
+(single-instance app, like the collab rooms): a job that was queued/processing
+when the process died can never finish, so reads lazily mark any
+running-status job unknown to this process as failed ("server restarted").
+
+Anonymous product: ``user_id`` is the caller's opaque client id (the
+X-Client-Id localStorage UUID) — a history bucket, not an identity.
 
 Job record shape (jsonb / file dict — one shape everywhere)::
 
@@ -27,7 +29,6 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
 
 from app.domain.ids import new_id
 from app.infrastructure.atomic import atomic_write_text
@@ -135,17 +136,9 @@ class AIJobService:
         raw: bytes,
         media_type: str,
         backend: ProviderSettings | None,
-        refund: Callable[[], None],
-        record_usage: Callable[[dict], None],
         now: float,
     ) -> dict:
-        """Queue one conversion; returns the job record immediately.
-
-        ``refund`` gives back the up-front ✦ charge when the conversion fails
-        (same contract as the sync endpoint); ``record_usage`` appends to the
-        usage ledger and MUST be called on the worker thread (usage is
-        thread-local to the provider call).
-        """
+        """Queue one conversion; returns the job record immediately."""
         job = {
             "id": new_id(),
             "user_id": user_id,
@@ -159,9 +152,7 @@ class AIJobService:
         }
         self._live.add(job["id"])
         self._save_record(job)
-        self._pool.submit(
-            self._run, dict(job), raw, media_type, backend, refund, record_usage
-        )
+        self._pool.submit(self._run, dict(job), raw, media_type, backend)
         return job
 
     def _run(
@@ -170,8 +161,6 @@ class AIJobService:
         raw: bytes,
         media_type: str,
         backend: ProviderSettings | None,
-        refund: Callable[[], None],
-        record_usage: Callable[[dict], None],
     ) -> None:
         import time as _time
 
@@ -195,22 +184,20 @@ class AIJobService:
                         job["id"], attempt + 1, e, backoff,
                     )
                     _time.sleep(backoff)
-            record_usage(self._ai.last_call_usage())
-            # Server-side approximate render so the dashboard card has a
+            # Server-side approximate render so the finished board has a
             # preview before the first client-side save (same as templates).
+            # The created board is anonymous: link_policy "edit", the URL is
+            # the capability.
             meta = self._documents.create(
                 diagram_to_svg(diagram),
                 (job["name"] or "sketch").rsplit(".", 1)[0] + " (AI redraw)",
                 diagram=diagram,
-                owner_id=job["user_id"],
             )
             job.update(status="done", doc_id=meta.id, updated_at=_time.time())
         except (AIUnavailable, AIBadOutput) as e:
-            refund()
             job.update(status="error", error=str(e), updated_at=_time.time())
         except Exception:  # noqa: BLE001 — a worker must never die silently
             logger.exception("ai job %s crashed", job["id"])
-            refund()
             job.update(
                 status="error",
                 error="Unexpected error while converting — please try again.",
