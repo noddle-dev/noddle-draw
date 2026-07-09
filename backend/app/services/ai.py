@@ -281,6 +281,87 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
+# --- lenient JSON extraction (models are sloppy; boards are big) ------------
+# "Result was not valid JSON" was the #1 AI failure: prose around the object,
+# trailing commas, Python literals, or a reply truncated mid-list by the
+# max_tokens ceiling. The pipeline below salvages all of those; the corrective
+# retry in _chat_json handles whatever remains.
+
+
+def _extract_json_object(text: str) -> str:
+    """Isolate the outermost ``{...}`` in a model reply (string-aware brace
+    walk) — tolerates prose/fences before and after the object."""
+    t = _strip_fences(text)
+    start = t.find("{")
+    if start == -1:
+        return t
+    depth = 0
+    in_str = esc = False
+    for i in range(start, len(t)):
+        c = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return t[start : i + 1]
+    return t[start:]  # truncated — _close_truncated may still save it
+
+
+def _close_truncated(t: str) -> str:
+    """Close any open string/brackets so a truncated object parses (the tail
+    element may be lost; far better than failing the whole edit)."""
+    stack: list[str] = []
+    in_str = esc = False
+    for c in t:
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in "{[":
+            stack.append("}" if c == "{" else "]")
+        elif c in "}]" and stack:
+            stack.pop()
+    out = t + ('"' if in_str else "")
+    out = re.sub(r",\s*$", "", out)
+    return out + "".join(reversed(stack))
+
+
+def _loads_lenient(text: str) -> dict:
+    """``json.loads`` with model-output repairs. Raises ``ValueError`` when
+    nothing parseable survives."""
+    candidate = _extract_json_object(text)
+    try:
+        data = json.loads(candidate)
+    except ValueError:
+        fixed = candidate.replace("“", '"').replace("”", '"')
+        fixed = re.sub(r",\s*([}\]])", r"\1", fixed)  # trailing commas
+        fixed = re.sub(r"\bTrue\b", "true", fixed)
+        fixed = re.sub(r"\bFalse\b", "false", fixed)
+        fixed = re.sub(r"\bNone\b", "null", fixed)
+        try:
+            data = json.loads(fixed)
+        except ValueError:
+            data = json.loads(_close_truncated(fixed))  # may raise → caller
+    if not isinstance(data, dict):
+        raise ValueError("model returned a non-object JSON value")
+    return data
+
+
 def _safe_node_id(raw: str, index: int) -> str:
     """Sanitize a model-supplied node id to a safe string usable as a DOM/JSON
     id. Falls back to n<index> when nothing usable survives."""
@@ -442,6 +523,50 @@ class AIService:
             {"role": "user", "content": user},
         ]
         return self._chat(messages, max_tokens).strip()
+
+    def _chat_json(
+        self,
+        messages: list[dict],
+        max_tokens: int,
+        settings: ProviderSettings | None = None,
+        endpoint: str | None = None,
+        timeout: float | None = None,
+    ) -> tuple[dict, str]:
+        """_chat + lenient JSON parsing + ONE corrective retry.
+
+        When even the lenient parser can't rescue the reply, the model is
+        shown its own broken output and asked once for ONLY the complete,
+        valid JSON object — this converts the vast majority of remaining
+        "Result was not valid JSON" failures into successes. Returns
+        ``(parsed, raw_text)``; raises AIBadOutput after the retry.
+        """
+        raw = self._chat(
+            messages, max_tokens=max_tokens, settings=settings,
+            endpoint=endpoint, timeout=timeout,
+        )
+        try:
+            return _loads_lenient(raw), raw
+        except ValueError:
+            pass
+        retry = messages + [
+            {"role": "assistant", "content": raw[-3000:]},
+            {
+                "role": "user",
+                "content": (
+                    "Your previous reply was NOT valid JSON. Respond again "
+                    "with ONLY the complete, valid JSON object — no prose, "
+                    "no code fences, and never truncate the node/edge lists."
+                ),
+            },
+        ]
+        raw2 = self._chat(
+            retry, max_tokens=max_tokens, settings=settings,
+            endpoint=endpoint, timeout=timeout,
+        )
+        try:
+            return _loads_lenient(raw2), raw2
+        except ValueError as e:
+            raise AIBadOutput(f"Result was not valid JSON: {e}", raw=raw2) from e
 
     def _chat(
         self,
@@ -828,12 +953,11 @@ class AIService:
                 ],
             }
         ]
-        out = self._chat(
+        data, out = self._chat_json(
             messages, max_tokens=6000, settings=settings, timeout=_IMAGE_TIMEOUT
         )
-        cleaned = _strip_fences(out)
         try:
-            spec = DiagramSpec.model_validate_json(cleaned)
+            spec = DiagramSpec.model_validate(data)
         except Exception as e:
             raise AIBadOutput(
                 f"Could not build a diagram from the model's output: {e}", raw=out
@@ -860,12 +984,11 @@ class AIService:
             f"{intro}\n\n{_DIAGRAM_RULES}\n\n{_DIAGRAM_JSON_SHAPE}\n\nInput:\n{text}"
         )
 
-        raw = self._chat(
+        data, raw = self._chat_json(
             [{"role": "user", "content": prompt}], max_tokens=4000, settings=settings
         )
-        cleaned = _strip_fences(raw)
         try:
-            spec = DiagramSpec.model_validate_json(cleaned)
+            spec = DiagramSpec.model_validate(data)
         except Exception as e:
             raise AIBadOutput(
                 f"Could not build a diagram from the model's output: {e}", raw=raw
@@ -996,12 +1119,9 @@ class AIService:
             messages.append({"role": "user", "content": prompt})
 
         endpoint = self._resolve_endpoint(model)
-        raw = self._chat(messages, max_tokens=16000, settings=settings, endpoint=endpoint)
-        cleaned = _strip_fences(raw)
-        try:
-            data = json.loads(cleaned)
-        except ValueError as e:
-            raise AIBadOutput(f"Result was not valid JSON: {e}", raw=raw) from e
+        data, raw = self._chat_json(
+            messages, max_tokens=16000, settings=settings, endpoint=endpoint
+        )
         result = data.get("diagram")
         if not isinstance(result, dict):
             raise AIBadOutput("Result is missing 'diagram'.", raw=raw)
