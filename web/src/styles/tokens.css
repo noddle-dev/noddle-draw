@@ -1510,3 +1510,30 @@ code { background: var(--panel-2); border: 1px solid var(--border); padding: 1px
 }
 .board-notfound-card h2 { margin: 0 0 8px; font-size: 18px; }
 .board-notfound-card p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+
+/* ---- chat: BYOK key chip + shortcut hints ---------------------------------- */
+.chat-key-row { display: flex; align-items: center; padding: 6px 10px 8px; }
+.chat-key-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
+  padding: 4px 5px 4px 11px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--panel); font-size: 12px;
+  color: var(--text-2); cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.chat-key-chip:hover { border-color: var(--purple); box-shadow: 0 1px 4px rgba(124, 58, 237, .12); }
+.chat-key-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; flex: none; }
+.chat-key-chip.unset .dot { background: #d97706; }
+.chat-key-chip .prov { font-weight: 650; color: var(--text); text-transform: capitalize; white-space: nowrap; }
+.chat-key-chip .mod { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.chat-key-chip .edit {
+  border: 1px solid var(--border-faint); border-radius: 999px; background: var(--panel-2);
+  padding: 2px 10px; font-size: 11.5px; font-weight: 600; color: var(--text-2); white-space: nowrap;
+}
+.chat-key-chip.unset { border-color: #f0c36d; background: #fffbeb; }
+.chat-key-chip.unset .prov { color: #92400e; }
+.chat-hint { padding: 6px 12px 10px; font-size: 11px; color: var(--muted); }
+.chat-hint kbd {
+  font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--panel-2); border: 1px solid var(--border-faint);
+  border-bottom-width: 2px; border-radius: 4px; padding: 0 4px;
+}

@@ -82,7 +82,6 @@ export function ClaudeChat() {
   const queuedChats = useAppStore((s) => s.queuedChats);
   const newChatSession = useAppStore((s) => s.newChatSession);
   const switchChatSession = useAppStore((s) => s.switchChatSession);
-  const [input, setInput] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [imgErr, setImgErr] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -104,16 +103,42 @@ export function ClaudeChat() {
   }, [messages.length, aiThinking]);
 
 
-  const send = (text: string) => {
-    if (!text.trim()) return;
-    setInput("");
-    askClaudeEdit(text, image ?? undefined); // enqueued — never locks
+  /** Send a message. No arg → read the textarea (uncontrolled — see below).
+   * BYOK gate: without a key, chatting can only fail — open the key modal
+   * instead and KEEP the draft so it sends after configuring. */
+  const send = (text?: string) => {
+    const el = inputRef.current;
+    const t = (text ?? el?.value ?? "").trim();
+    if (!t) return;
+    if (!getAiKeyConfig()) {
+      setKeyModalOpen(true);
+      return;
+    }
+    if (text === undefined && el) {
+      el.value = "";
+      // collapse the auto-grown textarea on EVERY send path (the ↑ button
+      // used to leave it stuck tall, stretching send/attach into giant blocks)
+      el.style.height = "auto";
+    }
+    askClaudeEdit(t, image ?? undefined); // enqueued — never locks
     setImage(null);
     setImgErr(null);
-    // collapse the auto-grown textarea on EVERY send path (the ↑ button used
-    // to leave it stuck tall, stretching send/attach into giant blocks)
-    if (inputRef.current) inputRef.current.style.height = "auto";
   };
+
+  /** Paste an image straight into the chat (⌘V on macOS, Ctrl+V on Windows/
+   * Linux) — same downscale/cap pipeline as the 📎 picker. Text pastes are
+   * untouched. */
+  const onPaste = (e: React.ClipboardEvent) => {
+    const item = Array.from(e.clipboardData.items).find((i) => ALLOWED_TYPES.test(i.type));
+    const file = item?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    setImgErr(null);
+    void prepareImage(file)
+      .then(setImage)
+      .catch((err) => setImgErr(err instanceof Error ? err.message : "Couldn't read that image."));
+  };
+  const modKey = /mac/i.test(navigator.platform) ? "\u2318" : "Ctrl";
 
   const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -150,18 +175,31 @@ export function ClaudeChat() {
           ))}
           <button className="chat-session-new" title="New session (clean context)" onClick={() => newChatSession(docId)}>＋</button>
         </div>
-        <div className="chat-model-row">
-          <label className="chat-model" title="Your browser-stored API key runs this chat (BYOK)">
-            <span className="lbl">Model</span>
-            <span className="muted" style={{ fontSize: 12 }}>
-              {keyCfg
-                ? `Your ${keyCfg.provider} key${keyCfg.model ? ` · ${keyCfg.model}` : ""}`
-                : "No API key yet"}
-            </span>
-            <button className="btn" style={{ marginLeft: 6 }} onClick={() => setKeyModalOpen(true)}>
-              {keyCfg ? "Edit…" : "Add your key…"}
-            </button>
-          </label>
+        <div className="chat-key-row">
+          <button
+            type="button"
+            className={`chat-key-chip${keyCfg ? "" : " unset"}`}
+            onClick={() => setKeyModalOpen(true)}
+            title={
+              keyCfg
+                ? "Your key runs this chat (BYOK, stays in this browser) — click to edit"
+                : "Add your AI key to start chatting (BYOK — stays in this browser)"
+            }
+          >
+            <span className="dot" />
+            {keyCfg ? (
+              <>
+                <span className="prov">{keyCfg.provider}</span>
+                <span className="mod">{keyCfg.model || "default model"}</span>
+                <span className="edit">Edit</span>
+              </>
+            ) : (
+              <>
+                <span className="prov">Add your AI key</span>
+                <span className="edit">Set up</span>
+              </>
+            )}
+          </button>
           {keyModalOpen && (
             <AiKeySettings
               onClose={() => setKeyModalOpen(false)}
@@ -236,27 +274,33 @@ export function ClaudeChat() {
             ref={inputRef}
             className="chat-input"
             rows={1}
+            // UNCONTROLLED on purpose: a controlled value + IME composition
+            // (Vietnamese Telex…) + store-driven re-renders duplicated the
+            // last typed character when editing mid-text. The value is read
+            // imperatively in send().
+            defaultValue=""
             // Keep the placeholder SHORT — a wrapping placeholder overflows
             // the 1-row box (text clipped mid-line under the border).
             placeholder={aiThinking ? "Keep typing — messages queue up…" : "Ask AI-Noddle to edit the diagram…"}
-            title="Enter to send · Shift+Enter for a new line"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
             // auto-grow up to the CSS max-height, then scroll
             onInput={(e) => {
               const el = e.currentTarget;
               el.style.height = "auto";
               el.style.height = Math.min(el.scrollHeight, 160) + "px";
             }}
+            onPaste={onPaste}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                send(input);
-                e.currentTarget.style.height = "auto";
+                send();
               }
             }}
           />
-          <button className="chat-send" onClick={() => { send(input); }}>↑</button>
+          <button className="chat-send" title="Send (Enter)" onClick={() => send()}>↑</button>
+        </div>
+        <div className="chat-hint">
+          <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> new line ·{" "}
+          <kbd>{modKey}+V</kbd> paste an image
         </div>
       </div>
     </div>
