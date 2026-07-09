@@ -28,6 +28,30 @@ export function nodeCenter(node: DiagramNode): Vec {
   return { x: node.x + node.w / 2, y: node.y + node.h / 2 };
 }
 
+/** Rotate `p` by `deg` (clockwise, SVG convention) around `c`. */
+export function rotatePoint(p: Vec, c: Vec, deg: number): Vec {
+  if (!deg) return p;
+  const r = (deg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
+}
+
+/**
+ * The perimeter point aimed at `toward`, honoring node rotation: the shape body
+ * is authored axis-aligned (ports/routing model), so we aim in the node's LOCAL
+ * frame and rotate the hit back out. Keeps floating edges clipping to the
+ * rotated silhouette the user sees.
+ */
+function rotatedPerimeter(node: DiagramNode, toward: Vec): Vec {
+  if (!node.rotation) return perimeterPoint(node, toward);
+  const c = nodeCenter(node);
+  const local = rotatePoint(toward, c, -node.rotation);
+  return rotatePoint(perimeterPoint(node, local), c, node.rotation);
+}
+
 /**
  * The diagram node whose axis-aligned body contains a content-space point, or
  * null. `excludeId` skips one node (e.g. an edge's other endpoint, so dragging
@@ -48,9 +72,11 @@ export function nodeAtPoint(
   return null;
 }
 
-/** Absolute point for a relative port (rel in 0..1 of the node box). */
+/** Absolute point for a relative port (rel in 0..1 of the node box), rotated
+ * with the node so the anchor sits on the shape the user sees. */
 export function portPoint(node: DiagramNode, rel: Vec): Vec {
-  return { x: node.x + rel.x * node.w, y: node.y + rel.y * node.h };
+  const p = { x: node.x + rel.x * node.w, y: node.y + rel.y * node.h };
+  return node.rotation ? rotatePoint(p, nodeCenter(node), node.rotation) : p;
 }
 
 /**
@@ -71,7 +97,7 @@ export function resolveEndpoint(
   if (att.kind === "port") return portPoint(node, att.rel);
   // floating
   const toward = otherPoint ?? nodeCenter(node);
-  return perimeterPoint(node, toward);
+  return rotatedPerimeter(node, toward);
 }
 
 export interface EdgeGeometry {

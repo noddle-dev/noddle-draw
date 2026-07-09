@@ -12,7 +12,7 @@
 import { useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { screenToContent } from "../../editor-core";
-import { perimeterPoint, snapConnect } from "../../editor-core/diagram";
+import { perimeterPoint, snapConnect, rotatePoint } from "../../editor-core/diagram";
 import type { DiagramEdge, DiagramNode, Vec } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
@@ -198,10 +198,18 @@ export function ConnectionPorts({
   //  • pointerdown near the border → start a connection from that point
   //  • anywhere deeper inside → do nothing, so the press bubbles to the node
   //    group and moves the shape as usual.
+  // The overlay + dots render inside a group rotated with the node, so all of
+  // this component's geometry lives in the node's LOCAL (un-rotated) frame:
+  // inverse-rotate the world cursor before projecting, and keep hoverPt local
+  // so it draws on the rotated border.
+  const center = { x: node.x + node.w / 2, y: node.y + node.h / 2 };
+  const toLocal = (p: Vec): Vec =>
+    node.rotation ? rotatePoint(p, center, -node.rotation) : p;
+
   const borderInfo = (e: ReactPointerEvent): { pt: Vec; near: boolean } | null => {
     const refs = useEditorStore.getState().refs;
     if (!refs) return null;
-    const c = screenToContent(refs.content, e.clientX, e.clientY);
+    const c = toLocal(screenToContent(refs.content, e.clientX, e.clientY));
     const pt = perimeterPoint(node, c);
     const near = Math.hypot(c.x - pt.x, c.y - pt.y) <= NEAR;
     return { pt, near };
@@ -228,8 +236,12 @@ export function ConnectionPorts({
       fill="none" stroke={ACCENT} strokeWidth={2} opacity={0.5} style={{ pointerEvents: "none" }} />
   );
 
+  const rotateTransform = node.rotation
+    ? `rotate(${node.rotation} ${center.x} ${center.y})`
+    : undefined;
+
   return (
-    <g data-editor-only="1">
+    <g data-editor-only="1" transform={rotateTransform}>
       {cue}
       {/* full-node overlay: near-border → connect/hover-dot, interior → move */}
       <rect
