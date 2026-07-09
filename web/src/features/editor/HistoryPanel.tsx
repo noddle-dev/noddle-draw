@@ -17,8 +17,8 @@ function fmtTime(ts: number): string {
   const d = new Date(ts * 1000);
   const today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
-  const hm = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-  return sameDay ? `Today ${hm}` : `${d.toLocaleDateString("vi-VN")} ${hm}`;
+  const hm = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return sameDay ? `Today ${hm}` : `${d.toLocaleDateString()} ${hm}`;
 }
 
 export function HistoryPanel({ docId, onClose }: { docId: string; onClose: () => void }) {

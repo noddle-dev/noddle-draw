@@ -170,39 +170,24 @@ export function clientId(): string {
   }
 }
 
-/** Which backend AI calls should use: the browser's key or the server pool.
- * Stored in localStorage "noddle.aiBackend" ("key" | "pool"); legacy values
- * from the accounts era are read defensively as "key". */
-export type AiBackendChoice = "key" | "pool";
-
-export function getAiBackend(): AiBackendChoice {
-  try {
-    return localStorage.getItem("noddle.aiBackend") === "pool" ? "pool" : "key";
-  } catch {
-    return "key";
-  }
-}
-
-export function setAiBackend(choice: AiBackendChoice): void {
-  try {
-    localStorage.setItem("noddle.aiBackend", choice);
-  } catch {
-    /* storage blocked */
-  }
-}
-
-/** X-AI-* and X-Client-Id headers for AI calls (BYOK travels per-request). */
-function aiHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { "X-Client-Id": clientId() };
-  if (getAiBackend() === "pool") return headers; // explicit server-pool pick
-  const cfg = getAiKeyConfig();
-  if (cfg) {
-    headers["X-AI-Provider"] = cfg.provider;
-    headers["X-AI-Key"] = cfg.key;
-    if (cfg.model) headers["X-AI-Model"] = cfg.model;
-    if (cfg.base) headers["X-AI-Base"] = cfg.base;
-  }
+/** X-AI-* headers for one key config (BYOK travels per-request). */
+function keyHeaders(cfg: AiKeyConfig): Record<string, string> {
+  const headers: Record<string, string> = {
+    "X-AI-Provider": cfg.provider,
+    "X-AI-Key": cfg.key,
+  };
+  if (cfg.model) headers["X-AI-Model"] = cfg.model;
+  if (cfg.base) headers["X-AI-Base"] = cfg.base;
   return headers;
+}
+
+/** Headers for AI calls: the stored BYOK key + this browser's job-history id. */
+function aiHeaders(): Record<string, string> {
+  const cfg = getAiKeyConfig();
+  return {
+    "X-Client-Id": clientId(),
+    ...(cfg ? keyHeaders(cfg) : {}),
+  };
 }
 
 /** Error carrying the backend's `detail` message when available. */
@@ -311,9 +296,16 @@ export const api = {
     return json<DocMeta>(res);
   },
 
-  /** Server feature flags — is the shared server AI pool configured? */
-  async getConfig(): Promise<{ pool_ai: boolean }> {
-    return json<{ pool_ai: boolean }>(await fetch(`${BASE}/api/config`));
+  /** Prove a key/model/base combination works BEFORE saving it — always
+   * resolves {ok, message} (a bad key is ok:false, not a throw). Takes the
+   * config explicitly so the modal can test unsaved form values. */
+  async testAiKey(cfg: AiKeyConfig): Promise<{ ok: boolean; message: string }> {
+    return json<{ ok: boolean; message: string }>(
+      await fetch(`${BASE}/api/ai/test-key`, {
+        method: "POST",
+        headers: keyHeaders(cfg),
+      }),
+    );
   },
 
   // ---- version history --------------------------------------------------------

@@ -42,21 +42,7 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   usage: ChatUsage;
-  /** Databricks serving-endpoint the session sends edits to (see CHAT_MODELS). */
-  model?: string;
 }
-
-/**
- * Selectable AI models for a chat session — POOL MODE ONLY (with a client-side
- * API key the model comes from the key config). The value is the Databricks
- * serving-endpoint name (the backend whitelists names starting with
- * "databricks-" and otherwise falls back to its default endpoint).
- */
-export const CHAT_MODELS: { value: string; label: string }[] = [
-  { value: "databricks-claude-opus-4-8", label: "Claude Opus 4.8 · default" },
-  { value: "databricks-claude-3-7-sonnet", label: "Claude Sonnet · faster" },
-];
-export const DEFAULT_CHAT_MODEL = CHAT_MODELS[0].value;
 
 interface BoardChats {
   sessions: ChatSession[];
@@ -214,8 +200,6 @@ interface AppState {
   newChatSession: (docId: string | null) => void;
   /** Switch the active session of a board. */
   switchChatSession: (docId: string | null, sessionId: string) => void;
-  /** Set the AI model used by a session (falls back to the active session). */
-  setChatModel: (docId: string | null, sessionId: string, model: string) => void;
   setAiThinking: (v: boolean) => void;
 }
 
@@ -237,7 +221,6 @@ function freshSession(n = 1): ChatSession {
     title: `Session ${n}`,
     messages: [],
     usage: { calls: 0, prompt: 0, completion: 0 },
-    model: DEFAULT_CHAT_MODEL,
   };
 }
 /** Get (creating if absent) the board's chat state. */
@@ -406,21 +389,6 @@ export const useAppStore = create<AppState>((set) => ({
       const board = ensureBoard(s.chats, key);
       if (!board.sessions.some((x) => x.id === sessionId)) return {};
       const chats = { ...s.chats, [key]: { ...board, activeId: sessionId } };
-      persistChats(chats);
-      return { chats };
-    }),
-
-  setChatModel: (docId, sessionId, model) =>
-    set((s) => {
-      const key = chatKey(docId);
-      const board = ensureBoard(s.chats, key);
-      const targetId = board.sessions.some((x) => x.id === sessionId)
-        ? sessionId
-        : board.activeId;
-      const sessions = board.sessions.map((sess) =>
-        sess.id === targetId ? { ...sess, model } : sess,
-      );
-      const chats = { ...s.chats, [key]: { ...board, sessions } };
       persistChats(chats);
       return { chats };
     }),

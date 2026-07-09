@@ -63,6 +63,32 @@ def get_service(request: Request) -> AIService:
     return request.app.state.ai_service
 
 
+def _settings_from_headers(request: Request) -> ProviderSettings | None:
+    """Parse the X-AI-* headers into ProviderSettings (None when no key)."""
+    key = (request.headers.get("X-AI-Key") or "").strip()
+    if not key:
+        return None
+    provider = (request.headers.get("X-AI-Provider") or "").strip().lower()
+    if provider not in AI_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown AI provider — expected one of: "
+            + ", ".join(sorted(AI_PROVIDERS)) + ".",
+        )
+    base = (request.headers.get("X-AI-Base") or "").strip()
+    if provider == "custom" and not base:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider 'custom' needs X-AI-Base (an OpenAI-compatible base URL).",
+        )
+    return ProviderSettings(
+        provider=provider,
+        api_key=key,
+        model=(request.headers.get("X-AI-Model") or "").strip(),
+        api_base=base,
+    )
+
+
 def _resolve_backend(request: Request) -> ProviderSettings | None:
     """Pick the AI backend for this request.
 
@@ -72,27 +98,9 @@ def _resolve_backend(request: Request) -> ProviderSettings | None:
        it downstream).
     3. Neither → 503 with an actionable message.
     """
-    key = (request.headers.get("X-AI-Key") or "").strip()
-    if key:
-        provider = (request.headers.get("X-AI-Provider") or "").strip().lower()
-        if provider not in AI_PROVIDERS:
-            raise HTTPException(
-                status_code=400,
-                detail="Unknown AI provider — expected one of: "
-                + ", ".join(sorted(AI_PROVIDERS)) + ".",
-            )
-        base = (request.headers.get("X-AI-Base") or "").strip()
-        if provider == "custom" and not base:
-            raise HTTPException(
-                status_code=400,
-                detail="Provider 'custom' needs X-AI-Base (an OpenAI-compatible base URL).",
-            )
-        return ProviderSettings(
-            provider=provider,
-            api_key=key,
-            model=(request.headers.get("X-AI-Model") or "").strip(),
-            api_base=base,
-        )
+    settings = _settings_from_headers(request)
+    if settings is not None:
+        return settings
     service: AIService = request.app.state.ai_service
     if service.pool_available():
         return None  # None ⇒ shared Databricks pool
@@ -103,6 +111,27 @@ def _client_id(request: Request) -> str | None:
     """The anonymous job-history bucket (localStorage UUID), or None."""
     cid = (request.headers.get("X-Client-Id") or "").strip()[:_MAX_CLIENT_ID]
     return cid or None
+
+
+@router.post("/test-key")
+async def test_ai_key(
+    request: Request,
+    service: AIService = Depends(get_service),
+) -> dict:
+    """Fire the smallest possible chat at the caller's provider to prove the
+    key/model/base combination works. Always resolves ``{ok, message}`` — a
+    bad key is ``ok: false``, never a throw (only malformed headers are 400).
+    The key rides the X-AI-* headers like every other AI call; it is neither
+    stored nor logged.
+    """
+    settings = _settings_from_headers(request)  # may 400 (bad provider/base)
+    if settings is None:
+        raise HTTPException(status_code=400, detail="Missing X-AI-Key header.")
+    try:
+        model = await run_in_threadpool(service.test_key, settings)
+        return {"ok": True, "message": f"Key works — model: {model}."}
+    except (AIUnavailable, AIBadOutput) as e:
+        return {"ok": False, "message": str(e)}
 
 
 @router.post("/image-to-svg", response_model=SvgOut)

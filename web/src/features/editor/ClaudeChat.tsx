@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import { CHAT_MODELS, DEFAULT_CHAT_MODEL, chatKey, useAppStore } from "../../state/appStore";
+import { chatKey, useAppStore } from "../../state/appStore";
 import type { ChatMessage } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
 import { getAiKeyConfig } from "../../shared/api/client";
@@ -82,7 +82,6 @@ export function ClaudeChat() {
   const queuedChats = useAppStore((s) => s.queuedChats);
   const newChatSession = useAppStore((s) => s.newChatSession);
   const switchChatSession = useAppStore((s) => s.switchChatSession);
-  const setChatModel = useAppStore((s) => s.setChatModel);
   const [input, setInput] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [imgErr, setImgErr] = useState<string | null>(null);
@@ -90,8 +89,8 @@ export function ClaudeChat() {
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Client-side BYOK: with a browser key configured the model comes from the
-  // key config (X-AI-* headers); the Databricks endpoint picker is pool-only.
+  // Client-side BYOK — the ONLY backend in the OSS build: the model comes
+  // from the browser-stored key config (X-AI-* headers).
   const [keyCfg, setKeyCfg] = useState(getAiKeyConfig());
   const [keyModalOpen, setKeyModalOpen] = useState(false);
 
@@ -104,7 +103,6 @@ export function ClaudeChat() {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, aiThinking]);
 
-  const sessionModel = active?.model ?? DEFAULT_CHAT_MODEL;
 
   const send = (text: string) => {
     if (!text.trim()) return;
@@ -153,32 +151,17 @@ export function ClaudeChat() {
           <button className="chat-session-new" title="New session (clean context)" onClick={() => newChatSession(docId)}>＋</button>
         </div>
         <div className="chat-model-row">
-          {keyCfg ? (
-            <label className="chat-model" title="Your browser-stored API key runs this chat">
-              <span className="lbl">Model</span>
-              <span className="muted" style={{ fontSize: 12 }}>
-                Your {keyCfg.provider} key{keyCfg.model ? ` · ${keyCfg.model}` : ""}
-              </span>
-              <button className="btn" style={{ marginLeft: 6 }} onClick={() => setKeyModalOpen(true)}>
-                Edit…
-              </button>
-            </label>
-          ) : (
-            <label className="chat-model" title="Server AI endpoint for this session">
-              <span className="lbl">Model</span>
-              <select
-                value={sessionModel}
-                onChange={(e) => setChatModel(docId, active?.id ?? "", e.target.value)}
-              >
-                {CHAT_MODELS.map((m) => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
-              <button className="btn" style={{ marginLeft: 6 }} onClick={() => setKeyModalOpen(true)}>
-                Use my key…
-              </button>
-            </label>
-          )}
+          <label className="chat-model" title="Your browser-stored API key runs this chat (BYOK)">
+            <span className="lbl">Model</span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {keyCfg
+                ? `Your ${keyCfg.provider} key${keyCfg.model ? ` · ${keyCfg.model}` : ""}`
+                : "No API key yet"}
+            </span>
+            <button className="btn" style={{ marginLeft: 6 }} onClick={() => setKeyModalOpen(true)}>
+              {keyCfg ? "Edit…" : "Add your key…"}
+            </button>
+          </label>
           {keyModalOpen && (
             <AiKeySettings
               onClose={() => setKeyModalOpen(false)}

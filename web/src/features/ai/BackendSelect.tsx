@@ -1,65 +1,31 @@
 /**
- * features/ai/BackendSelect — which AI backend runs your calls.
+ * features/ai/BackendSelect — shows which key runs your AI calls (BYOK-only).
  *
- * BYOK is client-side: "Your API key" (localStorage, sent per-request as
- * X-AI-* headers) or "Server AI" (the shared pool — only offered when the
- * server reports one via GET /api/config → pool_ai). A "Configure…" button
- * opens the key modal.
+ * The OSS build has exactly one AI backend: YOUR key, stored in this browser
+ * (localStorage) and sent per-request as X-AI-* headers. This chip shows the
+ * configured provider/model and opens the key modal.
  */
-import { useEffect, useState } from "react";
-import {
-  api,
-  getAiBackend,
-  getAiKeyConfig,
-  setAiBackend,
-  type AiBackendChoice,
-} from "../../shared/api/client";
+import { useState } from "react";
+import { getAiKeyConfig, type AiKeyConfig } from "../../shared/api/client";
 import { AiKeySettings } from "./AiKeySettings";
 
 export function BackendSelect({
   onChange,
 }: {
-  /** Notified when the effective backend changes (key saved/removed, pick). */
-  onChange?: (v: AiBackendChoice) => void;
+  /** Notified when the key config changes (saved/removed). */
+  onChange?: (cfg: AiKeyConfig | null) => void;
 }) {
-  const [choice, setChoice] = useState<AiBackendChoice>(getAiBackend());
-  const [poolAi, setPoolAi] = useState(false);
   const [keyCfg, setKeyCfg] = useState(getAiKeyConfig());
   const [modalOpen, setModalOpen] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    api
-      .getConfig()
-      .then((c) => {
-        if (live) setPoolAi(c.pool_ai);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const pick = (v: AiBackendChoice) => {
-    setChoice(v);
-    setAiBackend(v);
-    onChange?.(v);
-  };
-
   return (
-    <label className="ai-backend" title="Which AI backend runs your calls">
+    <label className="ai-backend" title="Your browser-stored API key runs the AI (BYOK)">
       <span className="lbl">Run with</span>
-      <select
-        value={keyCfg ? choice : poolAi ? "pool" : "key"}
-        onChange={(e) => pick(e.target.value as AiBackendChoice)}
-      >
-        <option value="key">
-          {keyCfg
-            ? `Your ${keyCfg.provider} key${keyCfg.model ? ` · ${keyCfg.model}` : ""}`
-            : "Your API key (not set)"}
-        </option>
-        {poolAi && <option value="pool">Server AI (shared)</option>}
-      </select>
+      <span className="muted" style={{ fontSize: 12.5 }}>
+        {keyCfg
+          ? `Your ${keyCfg.provider} key${keyCfg.model ? ` · ${keyCfg.model}` : ""}`
+          : "No API key yet"}
+      </span>
       <button
         type="button"
         className="btn"
@@ -73,7 +39,7 @@ export function BackendSelect({
           onClose={() => setModalOpen(false)}
           onSaved={(cfg) => {
             setKeyCfg(cfg);
-            pick(cfg ? "key" : poolAi ? "pool" : "key");
+            onChange?.(cfg);
           }}
         />
       )}

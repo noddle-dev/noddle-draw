@@ -65,7 +65,7 @@ export function setGuestName(name: string): void {
 }
 
 /** This browser's anonymous identity — auto-generated AND persisted on first
- * read ("tự tạo session", Excalidraw-style), so drawing needs zero prompts.
+ * read (Excalidraw-style), so drawing needs zero prompts.
  * Reads the old sessionStorage key as a migration. */
 export function getIdentity(): { name: string; color: string } {
   try {

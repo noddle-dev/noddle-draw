@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# railway-sync-env.sh — shared env-sync tool cho mọi repo Noddle (source of truth: noddle_artifact).
-# Đẩy secrets/config từ root .env lên Railway theo manifest DECLARATIVE `railway.env.map`
-# (repo con không sửa script này — chỉ sửa manifest). Chống ad-hoc:
-#   - chỉ push biến có mặt trong manifest (allowlist per service)
-#   - chặn infra vars (fromService trên Railway, giá trị local sẽ phá prod)
-#   - chặn giá trị localhost trừ khi --force-local
-#   - value đi qua --stdin (không lộ trong process list / shell history)
+# railway-sync-env.sh — env-sync tool shared across Noddle repos.
+# Pushes secrets/config from the root .env to Railway following the DECLARATIVE
+# manifest `railway.env.map` (edit the manifest, not this script). Anti-ad-hoc:
+#   - only pushes variables present in the manifest (per-service allowlist)
+#   - blocks infra vars (Railway provides them via fromService; local values
+#     would break prod)
+#   - blocks localhost values unless --force-local
+#   - values travel via --stdin (never exposed in process list / shell history)
 #
 # Usage:  railway-sync-env.sh [--dry-run] [--only VAR] [--env production] [--deploy] [--force-local]
-#   --dry-run      In ra kế hoạch, không push
-#   --only VAR     Chỉ sync một biến
+#   --dry-run      Print the plan, push nothing
+#   --only VAR     Sync a single variable
 #   --env ENV      Railway environment (default: production)
-#   --deploy       Trigger redeploy sau khi set (default: --skip-deploys;
-#                  NEXT_PUBLIC_* bake lúc build nên đổi xong PHẢI deploy lại)
-#   --force-local  Cho phép value chứa localhost/127.0.0.1 (mặc định chặn)
+#   --deploy       Trigger a redeploy after setting (default: --skip-deploys;
+#                  build-time vars are baked at build so a redeploy is REQUIRED)
+#   --force-local  Allow values containing localhost/127.0.0.1 (blocked by default)
 #
-# Manifest `railway.env.map` (cạnh root .env), mỗi dòng:  VAR_NAME  service1,service2
-# Xem railway.env.map.example trong thư mục này.
+# Manifest `railway.env.map` (next to the root .env), one line per variable:
+#   VAR_NAME  service1,service2
 
 set -euo pipefail
 
@@ -38,11 +39,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-[[ -f "$ENV_FILE" ]] || { echo "❌ Không thấy $ENV_FILE (chạy từ repo root)" >&2; exit 1; }
-[[ -f "$MAP_FILE" ]] || { echo "❌ Không thấy $MAP_FILE — tạo từ railway.env.map.example" >&2; exit 1; }
-command -v railway >/dev/null || { echo "❌ Cần Railway CLI" >&2; exit 1; }
+[[ -f "$ENV_FILE" ]] || { echo "❌ $ENV_FILE not found (run from the repo root)" >&2; exit 1; }
+[[ -f "$MAP_FILE" ]] || { echo "❌ $MAP_FILE not found" >&2; exit 1; }
+command -v railway >/dev/null || { echo "❌ Railway CLI required" >&2; exit 1; }
 
-# Infra vars: Railway tự cấp qua fromService/reference — không bao giờ push từ local.
+# Infra vars: Railway provides them via fromService/reference — never push local values.
 BLOCKED='^(DATABASE_URL|REDIS_URL|PORT|RAILWAY_.*|.*_URL_SERVER|.*REDIRECT_URI.*)$'
 
 errors=0 pushed=0
@@ -54,21 +55,21 @@ while read -r line; do
   [[ -n "$ONLY" && "$var" != "$ONLY" ]] && continue
 
   if [[ "$var" =~ $BLOCKED ]]; then
-    echo "⛔ $var là infra var (fromService) — bỏ khỏi manifest"; errors=$((errors+1)); continue
+    echo "⛔ $var is an infra var (fromService) — remove it from the manifest"; errors=$((errors+1)); continue
   fi
   if [[ -z "$services" ]]; then
-    echo "⛔ $var thiếu danh sách service trong manifest"; errors=$((errors+1)); continue
+    echo "⛔ $var is missing its service list in the manifest"; errors=$((errors+1)); continue
   fi
 
-  # Đọc value từ .env (dòng cuối thắng, bỏ quote bao ngoài nếu có)
+  # Read the value from .env (last line wins, strip surrounding quotes)
   raw="$(grep -E "^${var}=" "$ENV_FILE" | tail -1 || true)"
   if [[ -z "$raw" ]]; then
-    echo "⚠️  $var có trong manifest nhưng không có trong $ENV_FILE — bỏ qua"; continue
+    echo "⚠️  $var is in the manifest but not in $ENV_FILE — skipping"; continue
   fi
   value="${raw#*=}"; value="${value%\"}"; value="${value#\"}"
 
   if [[ $FORCE_LOCAL -eq 0 && "$value" =~ (localhost|127\.0\.0\.1) ]]; then
-    echo "⛔ $var chứa localhost — giá trị dev, không push (--force-local để ép)"; errors=$((errors+1)); continue
+    echo "⛔ $var contains localhost — dev value, not pushing (--force-local to override)"; errors=$((errors+1)); continue
   fi
 
   IFS=',' read -ra svc_arr <<<"$services"
@@ -85,10 +86,9 @@ while read -r line; do
 done < "$MAP_FILE"
 
 if [[ $DEPLOY -eq 1 && $DRY_RUN -eq 0 ]]; then
-  echo "↻ Trigger redeploy để re-bake biến build-time…"
-  # Redeploy từng service có biến vừa đổi: dùng caller workflow hoặc `railway up` per service.
-  echo "   → chạy workflow deploy của repo (gh workflow run deploy) hoặc 'railway redeploy --service <svc>'"
+  echo "↻ Redeploy needed to re-bake build-time variables…"
+  echo "   → run the repo's deploy workflow (gh workflow run deploy) or 'railway redeploy --service <svc>'"
 fi
 
-echo "— $pushed set(s), $errors lỗi —"
+echo "— $pushed set(s), $errors error(s) —"
 exit $(( errors > 0 ? 1 : 0 ))

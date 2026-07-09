@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 import {
+  api,
   getAiKeyConfig,
   setAiKeyConfig,
   type AiKeyConfig,
@@ -34,17 +35,38 @@ export function AiKeySettings({
   const [key, setKey] = useState(existing?.key ?? "");
   const [model, setModel] = useState(existing?.model ?? "");
   const [base, setBase] = useState(existing?.base ?? "");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const canSave =
     !!key.trim() && (provider !== "custom" || !!base.trim());
 
+  const formConfig = (): AiKeyConfig => ({
+    provider,
+    key: key.trim(),
+    model: model.trim(),
+    base: provider === "custom" ? base.trim() : "",
+  });
+
+  // Fire the smallest possible chat at the provider to prove the CURRENT form
+  // values work — before saving. The key rides the request headers only.
+  const test = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await api.testAiKey(formConfig()));
+    } catch (err) {
+      setTestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const save = () => {
-    const cfg: AiKeyConfig = {
-      provider,
-      key: key.trim(),
-      model: model.trim(),
-      base: provider === "custom" ? base.trim() : "",
-    };
+    const cfg = formConfig();
     setAiKeyConfig(cfg);
     onSaved?.(cfg);
     onClose();
@@ -124,6 +146,20 @@ export function AiKeySettings({
           </div>
         )}
 
+        {testResult && (
+          <p
+            style={{
+              fontSize: 12.5,
+              margin: "10px 0 0",
+              lineHeight: 1.45,
+              color: testResult.ok ? "var(--ok, #16a34a)" : "var(--danger)",
+            }}
+          >
+            {testResult.ok ? "✓ " : "✕ "}
+            {testResult.message}
+          </p>
+        )}
+
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
           {existing && (
             <button className="btn" style={{ color: "var(--danger)" }} onClick={remove}>
@@ -131,6 +167,9 @@ export function AiKeySettings({
             </button>
           )}
           <div style={{ flex: 1 }} />
+          <button className="btn" disabled={!canSave || testing} onClick={() => void test()}>
+            {testing ? "Testing…" : "Test"}
+          </button>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" disabled={!canSave} onClick={save}>
             Save

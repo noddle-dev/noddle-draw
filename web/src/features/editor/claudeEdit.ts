@@ -10,7 +10,7 @@
  * diagramStore.loadDiagram → broadcast live to every collab peer.
  */
 import { api } from "../../shared/api/client";
-import { chatKey, useAppStore } from "../../state/appStore";
+import { useAppStore } from "../../state/appStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { useEditorStore } from "../../state/editorStore";
 import { usePagesStore } from "../../state/pagesStore";
@@ -44,12 +44,6 @@ const transcripts = new Map<string, Turn[]>();
 function activeSessionId(docId: string | null): string {
   const board = useAppStore.getState().chats[docId ?? "__scratch__"];
   return board?.activeId ?? "s0";
-}
-
-/** Databricks serving-endpoint the board's active session should use. */
-function activeModel(docId: string | null): string | undefined {
-  const board = useAppStore.getState().chats[chatKey(docId)];
-  return board?.sessions.find((s) => s.id === board.activeId)?.model;
 }
 
 /** Transcript is per (board, session) so a new session starts a clean context. */
@@ -136,7 +130,7 @@ async function drain(): Promise<void> {
           item.text,
           diagram,
           transcript.slice(-MAX_TURNS),
-          activeModel(item.docId),
+          undefined,
           item.image,
         );
         // The user may have switched pages WHILE the model worked — applying

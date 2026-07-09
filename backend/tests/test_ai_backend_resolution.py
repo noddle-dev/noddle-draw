@@ -83,6 +83,37 @@ def test_no_key_and_no_pool_is_503(client, monkeypatch):
     assert "settings" not in client.captured  # the provider was never called
 
 
+def test_key_endpoint_round_trips(client, monkeypatch):
+    monkeypatch.setattr(
+        AIService, "test_key", lambda self, settings: settings.model or "default-model"
+    )
+    r = client.post(
+        "/api/ai/test-key",
+        headers={"X-AI-Provider": "openai", "X-AI-Key": "sk-x", "X-AI-Model": "gpt-5"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "message": "Key works — model: gpt-5."}
+
+
+def test_key_endpoint_reports_bad_key_as_ok_false(client, monkeypatch):
+    from app.services.ai import AIUnavailable
+
+    def boom(self, settings):
+        raise AIUnavailable("provider rejected the key")
+
+    monkeypatch.setattr(AIService, "test_key", boom)
+    r = client.post(
+        "/api/ai/test-key", headers={"X-AI-Provider": "claude", "X-AI-Key": "bad"}
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert "rejected" in r.json()["message"]
+
+
+def test_key_endpoint_requires_a_key(client):
+    assert client.post("/api/ai/test-key").status_code == 400
+
+
 def test_config_reports_pool_flag(client, monkeypatch):
     monkeypatch.setattr(AIService, "pool_available", staticmethod(lambda: True))
     assert client.get("/api/config").json() == {"pool_ai": True}

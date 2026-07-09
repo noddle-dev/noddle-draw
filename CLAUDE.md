@@ -100,6 +100,11 @@ There is no Python linter/formatter config checked in; match surrounding style.
 
 ## Hard rules
 
+- **English only.** This is a public OSS repo: all code, comments, docstrings,
+  UI strings, commit messages and docs are written in English — no Vietnamese
+  (or any other language). Don't hardcode locales in date/number formatting
+  (`toLocaleString(undefined, …)`, never `"vi-VN"`).
+
 - Sanitize before store/display: ALL SVG passes `security/svg_sanitizer.py`
   (`sanitize_svg`); untrusted strings are `esc()`'d before touching innerHTML.
 - Document ids are `uuid4().hex[:12]`, validated `^[0-9a-f]{12}$` (keep it).

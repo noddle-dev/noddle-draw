@@ -13,6 +13,8 @@ cd web && npm install && npm run dev                  # SPA on :5173
 
 ## Before you open a PR
 
+- **English only** — code, comments, UI strings, commit messages and docs.
+  Don't hardcode locales in date/number formatting.
 - `python -m pytest backend/tests -q` — backend tests must pass.
 - `cd web && npm run typecheck && npm run build` — no TS errors.
 - Respect the layering: `api → services → domain` on the backend
