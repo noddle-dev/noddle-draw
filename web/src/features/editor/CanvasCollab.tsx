@@ -5,12 +5,14 @@
  * (content coords → screen via the shared camera; pruned when stale).
  * MOCKUP: the floating "Ask Claude" chat bar (routes to the chat panel).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { contentToStage } from "../../editor-core";
 import { useAppStore } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
 import { useCollabStore, type RemoteCursor } from "../../state/collabStore";
 import { usePagesStore } from "../../state/pagesStore";
+import { getAiKeyConfig } from "../../shared/api/client";
+import { AiKeySettings } from "../ai/AiKeySettings";
 import { askClaudeEdit } from "./claudeEdit";
 
 const STALE_MS = 6000;
@@ -68,17 +70,27 @@ function RemoteCursors() {
 }
 
 export function CanvasCollab() {
-  const [chatInput, setChatInput] = useState("");
   const aiThinking = useAppStore((s) => s.aiThinking);
   const queuedChats = useAppStore((s) => s.queuedChats);
+  // UNCONTROLLED input — same IME fix as the chat panel: a controlled value +
+  // Vietnamese composition + store re-renders duplicated the last segment.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
 
   const sendToClaude = () => {
-    const t = chatInput.trim();
+    const el = inputRef.current;
+    const t = (el?.value ?? "").trim();
     if (!t) return;
+    // BYOK gate — without a key the request can only 503; prompt for the key
+    // and KEEP the draft so it sends after configuring.
+    if (!getAiKeyConfig()) {
+      setKeyModalOpen(true);
+      return;
+    }
     // Open the chat panel so the conversation is visible; the queue takes it
     // from here — no locking, messages process in order.
     useAppStore.getState().setRightTab("claude");
-    setChatInput("");
+    if (el) el.value = "";
     askClaudeEdit(t);
   };
 
@@ -94,13 +106,40 @@ export function CanvasCollab() {
       <div className="canvas-chatbar">
         <span className="spark">✦</span>
         <input
+          ref={inputRef}
           placeholder={hint}
-          value={chatInput}
-          onChange={(e) => setChatInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") sendToClaude(); }}
+          defaultValue=""
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) sendToClaude();
+          }}
+          onPaste={(e) => {
+            // An image pasted into the mini bar belongs to the FULL chat
+            // (attachment preview + send live there): route the focus over
+            // and let the panel's own paste pipeline handle the file.
+            const hasImage = Array.from(e.clipboardData.items).some((i) =>
+              /^image\//.test(i.type),
+            );
+            if (hasImage) {
+              e.preventDefault();
+              useAppStore.getState().setRightTab("claude");
+              // Re-dispatch on the panel textarea once it mounts.
+              const dt = e.clipboardData;
+              requestAnimationFrame(() => {
+                const ta = document.querySelector<HTMLTextAreaElement>(".chat-input");
+                if (!ta) return;
+                ta.focus();
+                ta.dispatchEvent(new ClipboardEvent("paste", {
+                  clipboardData: dt,
+                  bubbles: true,
+                  cancelable: true,
+                }));
+              });
+            }
+          }}
         />
         <button className="send" onClick={sendToClaude}>↑</button>
       </div>
+      {keyModalOpen && <AiKeySettings onClose={() => setKeyModalOpen(false)} />}
     </>
   );
 }

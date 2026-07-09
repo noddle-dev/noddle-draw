@@ -291,21 +291,27 @@ const HANDLE_ROLES: HandleRole[] = [
 ];
 
 /**
- * Rotation grip — a circle floating above the top edge (Lucid/Figma style).
- * Dragging rotates the node around its center; with snap on (or Shift) the
- * angle sticks to 15° steps, and 0/90/180/270 always attract within ±3° so
- * "back to straight" is easy. Double-click resets to 0°.
+ * Rotation affordance (draw.io-style): hovering just OUTSIDE any corner of
+ * the selected node shows a rotate cursor — drag there to rotate around the
+ * center. A small visible ↻ button floats past the top-right corner for
+ * discoverability (double-click it to reset to 0°). With snap on (or Shift)
+ * the angle sticks to 15° steps; 0/90/180/270 always attract within ±3°.
+ * Rendered by DiagramLayer in the TOP overlay (z-order — see there).
  */
+const ROTATE_CURSOR = `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'>" +
+    "<path d='M9 3a6 6 0 1 1-5.6 3.8' fill='none' stroke='white' stroke-width='4'/>" +
+    "<path d='M9 3a6 6 0 1 1-5.6 3.8' fill='none' stroke='black' stroke-width='1.8'/>" +
+    "<path d='M9 0.8 L12 3 L9 5.2 Z' fill='black' stroke='white' stroke-width='0.8'/>" +
+    "</svg>",
+)}") 9 9, grab`;
+
 export function RotateHandle({ node }: { node: DiagramNode }) {
   const z = useEditorStore((s) => s.cam.z) || 1;
-  const r = 5.5 / z; // constant ~11px screen circle
-  const lift = 26 / z; // distance above the top edge
   const cx = node.x + node.w / 2;
   const cy = node.y + node.h / 2;
-  const hx = cx;
-  const hy = node.y - lift;
 
-  const start = (e: ReactPointerEvent) => {
+  const startRotate = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     if (panState.spaceHeld) return;
     e.stopPropagation();
@@ -343,35 +349,64 @@ export function RotateHandle({ node }: { node: DiagramNode }) {
     window.addEventListener("pointerup", up);
   };
 
+  // Invisible rotate zones just OUTSIDE each corner (past the resize grips).
+  const zoneR = 11 / z;
+  const off = 13 / z;
+  const corners = [
+    { x: node.x - off, y: node.y - off },
+    { x: node.x + node.w + off, y: node.y - off },
+    { x: node.x + node.w + off, y: node.y + node.h + off },
+    { x: node.x - off, y: node.y + node.h + off },
+  ];
+  // Visible ↻ button floating past the top-right corner (draw.io-style).
+  const btnR = 9 / z;
+  const bx = node.x + node.w + 24 / z;
+  const by = node.y - 24 / z;
+
   return (
     <g data-editor-only="1">
-      {/* stem from the box to the grip */}
-      <line
-        x1={hx}
-        y1={node.y - 3}
-        x2={hx}
-        y2={hy + r}
-        stroke={SELECT_STROKE}
-        strokeWidth={1}
-        vectorEffect="non-scaling-stroke"
-        style={{ pointerEvents: "none" }}
-      />
-      <circle
+      {corners.map((c, i) => (
+        <circle
+          key={i}
+          data-handle="rotate"
+          cx={c.x}
+          cy={c.y}
+          r={zoneR}
+          fill="transparent"
+          style={{ cursor: ROTATE_CURSOR }}
+          onPointerDown={startRotate}
+        />
+      ))}
+      <g
         data-handle="rotate"
-        cx={hx}
-        cy={hy}
-        r={r}
-        fill="#fff"
-        stroke={SELECT_STROKE}
-        strokeWidth={1.5}
-        vectorEffect="non-scaling-stroke"
-        style={{ cursor: "grab" }}
-        onPointerDown={start}
+        style={{ cursor: ROTATE_CURSOR }}
+        onPointerDown={startRotate}
         onDoubleClick={(e) => {
           e.stopPropagation();
           useDiagramStore.getState().updateNode(node.id, { rotation: undefined });
         }}
-      />
+      >
+        <circle
+          cx={bx}
+          cy={by}
+          r={btnR}
+          fill="#fff"
+          stroke={SELECT_STROKE}
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+        />
+        <text
+          x={bx}
+          y={by}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={12 / z}
+          fill={SELECT_STROKE}
+          style={{ pointerEvents: "none", userSelect: "none" }}
+        >
+          {"\u21bb"}
+        </text>
+      </g>
     </g>
   );
 }

@@ -1512,7 +1512,9 @@ code { background: var(--panel-2); border: 1px solid var(--border); padding: 1px
 .board-notfound-card p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
 
 /* ---- chat: BYOK key chip + shortcut hints ---------------------------------- */
-.chat-key-row { display: flex; align-items: center; padding: 6px 10px 8px; }
+/* parent .chat-sessions already pads 8px 10px — zero horizontal padding here
+   or the chip sits visibly indented vs the session tabs above it */
+.chat-key-row { display: flex; align-items: center; padding: 6px 0 2px; }
 .chat-key-chip {
   display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
   padding: 4px 5px 4px 11px; border: 1px solid var(--border);
