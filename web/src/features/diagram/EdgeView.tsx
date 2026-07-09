@@ -78,7 +78,10 @@ function depKey(edge: DiagramEdge, nodes: NodeMap): string {
       parts.push(`f:${att.point.x},${att.point.y}`);
     } else {
       const n = nodes[att.nodeId];
-      const bounds = n ? `${n.x},${n.y},${n.w},${n.h}` : "gone";
+      // Rotation is part of the geometry now (ports/perimeter rotate with the
+      // node), so it MUST be in the memo key or a rotated endpoint keeps its
+      // stale path until some other bound changes.
+      const bounds = n ? `${n.x},${n.y},${n.w},${n.h},${n.rotation ?? 0}` : "gone";
       parts.push(
         att.kind === "port"
           ? `p:${att.nodeId}@${att.rel.x},${att.rel.y}:${bounds}`
