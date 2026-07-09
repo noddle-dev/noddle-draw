@@ -360,6 +360,14 @@ function NodeProps({ id }: { id: string }) {
         <NumField label="Y" value={node.y} onCommit={(n) => updateNode(id, { y: n })} />
         <NumField label="W" value={node.w} min={20} onCommit={(n) => updateNode(id, { w: n })} />
         <NumField label="H" value={node.h} min={20} onCommit={(n) => updateNode(id, { h: n })} />
+        <NumField
+          label="∠°"
+          value={node.rotation ?? 0}
+          onCommit={(n) => {
+            const deg = ((n % 360) + 360) % 360;
+            updateNode(id, { rotation: deg === 0 ? undefined : deg });
+          }}
+        />
       </div>
 
       <div className="props-label">Styles</div>

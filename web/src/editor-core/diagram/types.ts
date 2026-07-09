@@ -110,6 +110,10 @@ export interface DiagramNode {
   fill: string;
   stroke: string;
   strokeWidth: number;
+  /** Rotation in degrees clockwise around the node center (absent → 0).
+   * Rendering only — the x/y/w/h bbox, ports and edge routing stay
+   * axis-aligned (Lucid-style v1). */
+  rotation?: number;
   /** Idle animation (absent → none). */
   anim?: NodeAnim;
   /** Animation speed when `anim` is set (absent → 1). */

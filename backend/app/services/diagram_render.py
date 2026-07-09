@@ -39,6 +39,16 @@ def _node_center(n: dict) -> tuple[float, float]:
     return _num(n.get("x")) + _num(n.get("w")) / 2, _num(n.get("y")) + _num(n.get("h")) / 2
 
 
+def _rotate_attr(n: dict) -> str:
+    """transform="rotate(...)" for a rotated node ("" when unrotated)."""
+    rot = n.get("rotation")
+    if isinstance(rot, (int, float)) and not isinstance(rot, bool) and float(rot) % 360:
+        x, y = _num(n.get("x")), _num(n.get("y"))
+        w, h = _num(n.get("w"), 120), _num(n.get("h"), 60)
+        return f' transform="rotate({float(rot) % 360:g} {x + w / 2:g} {y + h / 2:g})"'
+    return ""
+
+
 def _shape(n: dict) -> str:
     x, y = _num(n.get("x")), _num(n.get("y"))
     w, h = _num(n.get("w"), 120), _num(n.get("h"), 60)

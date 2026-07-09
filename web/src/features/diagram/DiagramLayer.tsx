@@ -14,7 +14,7 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { EdgeView, ARROW_HEADS, headMarkerId } from "./EdgeView";
 import { EdgeEndpointHandles } from "./EdgeEndpointHandles";
 import { SegmentHandles } from "./SegmentHandles";
-import { NodeView } from "./NodeView";
+import { NodeView, RotateHandle } from "./NodeView";
 import type { PreviewEdge } from "./ConnectionPorts";
 import type { ArrowHead, DiagramEdge, DiagramNode } from "../../editor-core/diagram";
 
@@ -98,6 +98,11 @@ export function DiagramLayer() {
   // handles (Lucid-style change-direction).
   const selEdge =
     selection.length === 1 && edges[selection[0]] ? edges[selection[0]] : null;
+  // The single selected node — its rotate grip renders in the TOP overlay at
+  // the end of this layer (interleaved node/edge z-order means a later edge's
+  // fat hit-path would otherwise cover a grip floating above the node).
+  const selNode =
+    selection.length === 1 && nodes[selection[0]] ? nodes[selection[0]] : null;
   const endpointHoverNode = endpointHoverId ? nodes[endpointHoverId] : null;
 
   // Preview connector: a synthetic edge rendered through EdgeView so the drag
@@ -223,6 +228,9 @@ export function DiagramLayer() {
           onHoverTarget={setEndpointHoverId}
         />
       )}
+      {/* rotate grip for the selected node — TOP-most so no edge hit-path
+          can steal its pointerdown. */}
+      {selNode && <RotateHandle node={selNode} />}
     </g>
   );
 }

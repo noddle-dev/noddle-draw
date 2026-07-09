@@ -182,6 +182,9 @@ export function NodeView({
           exporter bake the exact same motion deterministically. */}
       <g
         opacity={nodeOpacity}
+        // Rotation wraps shape+text only — halo, selection box, grips and
+        // ports stay axis-aligned (the bbox model the router/ports use).
+        transform={node.rotation ? `rotate(${node.rotation} ${cx} ${cy})` : undefined}
         className={node.anim ? `node-anim node-anim-${node.anim}` : undefined}
         data-node-anim={node.anim ?? undefined}
         data-anim-speed={node.anim ? node.animSpeed ?? 1 : undefined}
@@ -286,6 +289,92 @@ const HANDLE_ROLES: HandleRole[] = [
   { id: "sw", fx: 0, fy: 1, L: true, B: true, cur: "nesw-resize" },
   { id: "w", fx: 0, fy: 0.5, L: true, cur: "ew-resize" },
 ];
+
+/**
+ * Rotation grip — a circle floating above the top edge (Lucid/Figma style).
+ * Dragging rotates the node around its center; with snap on (or Shift) the
+ * angle sticks to 15° steps, and 0/90/180/270 always attract within ±3° so
+ * "back to straight" is easy. Double-click resets to 0°.
+ */
+export function RotateHandle({ node }: { node: DiagramNode }) {
+  const z = useEditorStore((s) => s.cam.z) || 1;
+  const r = 5.5 / z; // constant ~11px screen circle
+  const lift = 26 / z; // distance above the top edge
+  const cx = node.x + node.w / 2;
+  const cy = node.y + node.h / 2;
+  const hx = cx;
+  const hy = node.y - lift;
+
+  const start = (e: ReactPointerEvent) => {
+    if (e.button !== 0) return;
+    if (panState.spaceHeld) return;
+    e.stopPropagation();
+    const refs = useEditorStore.getState().refs;
+    if (!refs) return;
+    const content = refs.content;
+    const d = useDiagramStore.getState();
+    d.setDraggingId(node.id); // collab merges must not yank mid-gesture
+    const p0 = screenToContent(content, e.clientX, e.clientY);
+    const startPointer = (Math.atan2(p0.y - cy, p0.x - cx) * 180) / Math.PI;
+    const startRotation = node.rotation ?? 0;
+
+    const move = (ev: PointerEvent) => {
+      const p = screenToContent(content, ev.clientX, ev.clientY);
+      const pointer = (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI;
+      let deg = startRotation + (pointer - startPointer);
+      if (useAppStore.getState().snapOn || ev.shiftKey) {
+        deg = Math.round(deg / 15) * 15;
+      } else {
+        // The cardinal angles always attract — a straight shape is one flick away.
+        const near = Math.round(deg / 90) * 90;
+        if (Math.abs(deg - near) <= 3) deg = near;
+      }
+      deg = ((deg % 360) + 360) % 360;
+      useDiagramStore.getState().updateNode(node.id, {
+        rotation: deg === 0 ? undefined : Math.round(deg * 10) / 10,
+      });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      useDiagramStore.getState().setDraggingId(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  return (
+    <g data-editor-only="1">
+      {/* stem from the box to the grip */}
+      <line
+        x1={hx}
+        y1={node.y - 3}
+        x2={hx}
+        y2={hy + r}
+        stroke={SELECT_STROKE}
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+        style={{ pointerEvents: "none" }}
+      />
+      <circle
+        data-handle="rotate"
+        cx={hx}
+        cy={hy}
+        r={r}
+        fill="#fff"
+        stroke={SELECT_STROKE}
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+        style={{ cursor: "grab" }}
+        onPointerDown={start}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          useDiagramStore.getState().updateNode(node.id, { rotation: undefined });
+        }}
+      />
+    </g>
+  );
+}
 
 function ResizeHandles({ node }: { node: DiagramNode }) {
   const z = useEditorStore((s) => s.cam.z) || 1;

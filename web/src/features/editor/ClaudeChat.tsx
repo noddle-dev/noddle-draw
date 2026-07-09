@@ -13,6 +13,7 @@ import { chatKey, useAppStore } from "../../state/appStore";
 import type { ChatMessage } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
 import { getAiKeyConfig } from "../../shared/api/client";
+import { getIdentity } from "../../state/collabStore";
 import { AiKeySettings } from "../ai/AiKeySettings";
 import { askClaudeEdit } from "./claudeEdit";
 import { CHAT_SUGGESTIONS } from "./data";
@@ -135,10 +136,17 @@ export function ClaudeChat() {
     e.preventDefault();
     setImgErr(null);
     void prepareImage(file)
-      .then(setImage)
+      .then((url) => {
+        setImage(url);
+        // Attaching an image IS an AI intent — without a key it can only
+        // fail at send, so prompt for the key now (the image stays attached).
+        if (!getAiKeyConfig()) setKeyModalOpen(true);
+      })
       .catch((err) => setImgErr(err instanceof Error ? err.message : "Couldn't read that image."));
   };
   const modKey = /mac/i.test(navigator.platform) ? "\u2318" : "Ctrl";
+  // Your avatar initials come from the browser identity (renameable in Share).
+  const myInitials = getIdentity().name.replace(/^Guest-/, "").slice(0, 2).toUpperCase() || "ME";
 
   const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -151,6 +159,7 @@ export function ClaudeChat() {
     setImgErr(null);
     try {
       setImage(await prepareImage(file));
+      if (!getAiKeyConfig()) setKeyModalOpen(true); // see onPaste
     } catch (err) {
       setImgErr(err instanceof Error ? err.message : "Couldn't read that image.");
     }
@@ -218,7 +227,7 @@ export function ClaudeChat() {
       <div className="chat-log" ref={logRef}>
         {[WELCOME, ...messages].map((m, i) => (
           <div key={i} className={`chat-msg${m.who === "you" ? " you" : ""}`}>
-            <span className={`chat-ava ${m.who === "you" ? "you" : "ai"}`}>{m.who === "you" ? "DK" : "✦"}</span>
+            <span className={`chat-ava ${m.who === "you" ? "you" : "ai"}`}>{m.who === "you" ? myInitials : "✦"}</span>
             <div className={`chat-bubble ${m.who === "you" ? "you" : "ai"}`}>
               {m.image && <img className="chat-msg-thumb" src={m.image} alt="attached reference" />}
               {m.text}

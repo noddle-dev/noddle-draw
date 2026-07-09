@@ -915,7 +915,8 @@ class AIService:
             "\n## Board model\n"
             '- node: {"id","kind":"rect|rounded|ellipse|diamond","x","y" (top-left),'
             '"w","h","text" (single line),"fill","stroke","strokeWidth",'
-            '"anim"?:"pulse|glow|breathe|wobble","animSpeed"?:0.5|1|2}\n'
+            '"anim"?:"pulse|glow|breathe|wobble","animSpeed"?:0.5|1|2,'
+            '"rotation"?:degrees clockwise around the node center}\n'
             "- CONTAINERS/GROUPS are a convention: a large rect node with fill "
             '"transparent" acts as a group frame, with a separate small label '
             'node (fill AND stroke "transparent") as its title. Children simply '
@@ -1060,6 +1061,9 @@ class AIService:
                     node["animSpeed"] = speed(n.get("animSpeed"))
             if n.get("sketch") is True:
                 node["sketch"] = True
+            rot = n.get("rotation")
+            if isinstance(rot, (int, float)) and not isinstance(rot, bool) and float(rot) % 360:
+                node["rotation"] = round(float(rot) % 360, 1)
             nodes.append(node)
 
         def attachment(v: object) -> dict | None:
