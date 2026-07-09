@@ -18,6 +18,7 @@
  * opaque UUID identifying this browser's AI-job history (X-Client-Id).
  */
 import type { DiagramEdge, DiagramNode } from "../../editor-core/diagram";
+import { turnstileToken } from "../poolConfig";
 
 const BASE = ""; // same-origin (dev: Vite proxy; prod: served by FastAPI)
 
@@ -181,13 +182,20 @@ function keyHeaders(cfg: AiKeyConfig): Record<string, string> {
   return headers;
 }
 
-/** Headers for AI calls: the stored BYOK key + this browser's job-history id. */
-function aiHeaders(): Record<string, string> {
+/** Headers for AI calls: the stored BYOK key + this browser's job-history id.
+ * Key-less calls ride the shared pool — when the server requires Turnstile,
+ * a fresh token is fetched invisibly and attached (best-effort). */
+async function aiHeaders(): Promise<Record<string, string>> {
   const cfg = getAiKeyConfig();
-  return {
+  const headers: Record<string, string> = {
     "X-Client-Id": clientId(),
     ...(cfg ? keyHeaders(cfg) : {}),
   };
+  if (!cfg) {
+    const token = await turnstileToken();
+    if (token) headers["X-Turnstile-Token"] = token;
+  }
+  return headers;
 }
 
 /** Error carrying the backend's `detail` message when available. */
@@ -379,7 +387,7 @@ export const api = {
     if (prompt.trim()) fd.append("prompt", prompt.trim());
     const res = await fetch(`${BASE}/api/ai/image-to-svg`, {
       method: "POST",
-      headers: aiHeaders(),
+      headers: await aiHeaders(),
       body: fd,
     });
     return json<ImageToSvgOut>(res);
@@ -393,7 +401,7 @@ export const api = {
     if (prompt.trim()) fd.append("prompt", prompt.trim());
     const res = await fetch(`${BASE}/api/ai/jobs/image-to-svg`, {
       method: "POST",
-      headers: aiHeaders(),
+      headers: await aiHeaders(),
       body: fd,
     });
     return json<AiJobOut>(res);
@@ -401,12 +409,12 @@ export const api = {
   /** This browser's conversion history, newest first. */
   async listAiJobs(): Promise<AiJobOut[]> {
     return json<AiJobOut[]>(
-      await fetch(`${BASE}/api/ai/jobs`, { headers: aiHeaders() }),
+      await fetch(`${BASE}/api/ai/jobs`, { headers: await aiHeaders() }),
     );
   },
   async getAiJob(id: string): Promise<AiJobOut> {
     return json<AiJobOut>(
-      await fetch(`${BASE}/api/ai/jobs/${id}`, { headers: aiHeaders() }),
+      await fetch(`${BASE}/api/ai/jobs/${id}`, { headers: await aiHeaders() }),
     );
   },
   /** Remove one finished job from history. */
@@ -414,7 +422,7 @@ export const api = {
     return json<{ ok: boolean }>(
       await fetch(`${BASE}/api/ai/jobs/${id}`, {
         method: "DELETE",
-        headers: aiHeaders(),
+        headers: await aiHeaders(),
       }),
     );
   },
@@ -429,7 +437,7 @@ export const api = {
   ): Promise<TextToDiagramOut> {
     const res = await fetch(`${BASE}/api/ai/text-to-diagram`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...aiHeaders() },
+      headers: { "Content-Type": "application/json", ...(await aiHeaders()) },
       body: JSON.stringify({ text, format }),
     });
     return json<TextToDiagramOut>(res);
@@ -448,7 +456,7 @@ export const api = {
   ): Promise<{ message: string; usage?: { prompt: number; completion: number; total: number } } & TextToDiagramOut> {
     const res = await fetch(`${BASE}/api/ai/edit-diagram`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...aiHeaders() },
+      headers: { "Content-Type": "application/json", ...(await aiHeaders()) },
       body: JSON.stringify({
         instruction,
         diagram,

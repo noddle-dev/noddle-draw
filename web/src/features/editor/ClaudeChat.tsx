@@ -13,6 +13,7 @@ import { chatKey, useAppStore } from "../../state/appStore";
 import type { ChatMessage } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
 import { getAiKeyConfig } from "../../shared/api/client";
+import { poolInfo, poolInfoSync } from "../../shared/poolConfig";
 import { getIdentity } from "../../state/collabStore";
 import { AiKeySettings } from "../ai/AiKeySettings";
 import { askClaudeEdit } from "./claudeEdit";
@@ -93,6 +94,10 @@ export function ClaudeChat() {
   // from the browser-stored key config (X-AI-* headers).
   const [keyCfg, setKeyCfg] = useState(getAiKeyConfig());
   const [keyModalOpen, setKeyModalOpen] = useState(false);
+  const [poolAi, setPoolAi] = useState(poolInfoSync()?.pool_ai ?? false);
+  useEffect(() => {
+    void poolInfo().then((i) => setPoolAi(i.pool_ai));
+  }, []);
 
   const sessions = board?.sessions ?? [];
   const active = sessions.find((s) => s.id === board?.activeId);
@@ -111,7 +116,7 @@ export function ClaudeChat() {
     const el = inputRef.current;
     const t = (text ?? el?.value ?? "").trim();
     if (!t) return;
-    if (!getAiKeyConfig()) {
+    if (!getAiKeyConfig() && !(poolInfoSync()?.pool_ai)) {
       setKeyModalOpen(true);
       return;
     }
@@ -187,7 +192,7 @@ export function ClaudeChat() {
         <div className="chat-key-row">
           <button
             type="button"
-            className={`chat-key-chip${keyCfg ? "" : " unset"}`}
+            className={`chat-key-chip${keyCfg || poolAi ? "" : " unset"}`}
             onClick={() => setKeyModalOpen(true)}
             title={
               keyCfg
@@ -201,6 +206,12 @@ export function ClaudeChat() {
                 <span className="prov">{keyCfg.provider}</span>
                 <span className="mod">{keyCfg.model || "default model"}</span>
                 <span className="edit">Edit</span>
+              </>
+            ) : poolAi ? (
+              <>
+                <span className="prov">Free AI</span>
+                <span className="mod">shared, limited/day</span>
+                <span className="edit">Use my key</span>
               </>
             ) : (
               <>

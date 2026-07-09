@@ -115,7 +115,8 @@ def test_key_endpoint_requires_a_key(client):
 
 
 def test_config_reports_pool_flag(client, monkeypatch):
+    client.app.state.free_pool._key = ""  # free pool off for this check
     monkeypatch.setattr(AIService, "pool_available", staticmethod(lambda: True))
-    assert client.get("/api/config").json() == {"pool_ai": True}
+    assert client.get("/api/config").json()["pool_ai"] is True
     monkeypatch.setattr(AIService, "pool_available", staticmethod(lambda: False))
-    assert client.get("/api/config").json() == {"pool_ai": False}
+    assert client.get("/api/config").json()["pool_ai"] is False

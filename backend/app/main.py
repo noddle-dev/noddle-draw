@@ -28,6 +28,7 @@ from app.config import Settings
 from app.infrastructure.file_repository import FileDocumentRepository
 from app.services.ai import AIService
 from app.services.ai_jobs import AIJobService
+from app.services.pool import FreePool
 from app.services.audit import AuditService
 from app.services.comments import CommentService
 from app.services.documents import DocumentService
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "X-AI-Model",
             "X-AI-Base",
             "X-Client-Id",
+            "X-Turnstile-Token",
         ],
     )
 
@@ -139,6 +141,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # touches the network. BYOK is per-request (X-AI-* headers) — the server
     # stores no keys; DATABRICKS_* env is the optional shared pool.
     app.state.ai_service = AIService()
+    # Zero-cost shared tier: key-less AI calls ride OPENROUTER_POOL_KEY on
+    # OpenRouter :free models, behind per-IP + daily-budget guards (and
+    # optional Turnstile). Unconfigured ⇒ disabled; BYOK always works.
+    app.state.free_pool = FreePool()
     # Background image→board conversion queue: uploads become jobs a worker
     # pool converts in parallel; history (keyed by the anonymous X-Client-Id)
     # survives page reloads. DB-backed records in Postgres mode, file fallback
@@ -153,8 +159,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ---- routes -----------------------------------------------------------
     @app.get("/api/config")
     def _config() -> dict:
-        """Frontend feature flags: is the shared server AI pool available?"""
-        return {"pool_ai": app.state.ai_service.pool_available()}
+        """Frontend feature flags: shared AI availability + Turnstile key."""
+        return {
+            "pool_ai": app.state.ai_service.pool_available()
+            or app.state.free_pool.available(),
+            "turnstile_site_key": app.state.free_pool.turnstile_site_key or None,
+        }
 
     @app.get("/api/health")
     def _health() -> dict:

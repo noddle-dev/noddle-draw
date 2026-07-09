@@ -499,8 +499,8 @@ class AIService:
                 f"{OPENROUTER_BASE}/chat/completions",
                 {
                     "Authorization": f"Bearer {key}",
-                    "HTTP-Referer": "https://board.noddle.dev",
-                    "X-Title": "Noddle Board",
+                    "HTTP-Referer": "https://draw.noddle.dev",
+                    "X-Title": "noddle draw",
                 },
                 m,
                 messages,

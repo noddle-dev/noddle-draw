@@ -44,6 +44,7 @@ from app.services.ai import (
     AIUnavailable,
     ProviderSettings,
 )
+from app.services.pool import PoolLimited
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -104,6 +105,16 @@ def _resolve_backend(request: Request) -> ProviderSettings | None:
     service: AIService = request.app.state.ai_service
     if service.pool_available():
         return None  # None ⇒ shared Databricks pool
+    free_pool = getattr(request.app.state, "free_pool", None)
+    if free_pool is not None and free_pool.available():
+        # The zero-cost shared tier (OpenRouter :free) — guarded per-IP and
+        # by a global daily budget; raises 429/403/503 with actionable text.
+        ip = request.client.host if request.client else ""
+        try:
+            free_pool.check(ip, request.headers.get("X-Turnstile-Token"))
+        except PoolLimited as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+        return free_pool.settings()
     raise HTTPException(status_code=503, detail=_NO_BACKEND)
 
 

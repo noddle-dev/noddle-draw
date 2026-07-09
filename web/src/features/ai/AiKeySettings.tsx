@@ -23,6 +23,45 @@ const PROVIDERS: { value: AiProvider; label: string; keyHint: string }[] = [
   { value: "custom", label: "Custom (OpenAI-compatible)", keyHint: "API key" },
 ];
 
+/** Where to create a key for each provider (opens in a new tab). */
+const KEY_LINKS: Record<AiProvider, string> = {
+  claude: "https://console.anthropic.com/settings/keys",
+  openai: "https://platform.openai.com/api-keys",
+  gemini: "https://aistudio.google.com/apikey",
+  openrouter: "https://openrouter.ai/settings/keys",
+  custom: "",
+};
+
+/** One-click FREE presets — providers with a genuinely free key (no card). */
+const FREE_PRESETS: {
+  id: string;
+  label: string;
+  note: string;
+  provider: AiProvider;
+  model: string;
+  base: string;
+  link: string;
+}[] = [
+  {
+    id: "gemini",
+    label: "Google Gemini",
+    note: "free key in ~2 min, vision + best JSON",
+    provider: "gemini",
+    model: "gemini-2.5-flash",
+    base: "",
+    link: "https://aistudio.google.com/apikey",
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    note: "free, very fast (Llama-4 vision)",
+    provider: "custom",
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    base: "https://api.groq.com/openai/v1",
+    link: "https://console.groq.com/keys",
+  },
+];
+
 export function AiKeySettings({
   onClose,
   onSaved,
@@ -91,10 +130,34 @@ export function AiKeySettings({
           <div className="t" style={{ flex: 1, margin: 0 }}>Your AI key</div>
           <button className="props-close" onClick={onClose}>✕</button>
         </div>
-        <p className="muted" style={{ fontSize: 12.5, margin: "0 0 14px", lineHeight: 1.5 }}>
+        <p className="muted" style={{ fontSize: 12.5, margin: "0 0 12px", lineHeight: 1.5 }}>
           Bring your own key: it stays in this browser and is sent only with
           your AI requests — the server never stores it.
         </p>
+
+        {/* One-click free presets — turns BYOK from a barrier into 2 minutes. */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {FREE_PRESETS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className="btn"
+              style={{
+                flex: 1, textAlign: "left", padding: "8px 10px", lineHeight: 1.35,
+                borderColor: provider === f.provider && (f.base === "" || base === f.base)
+                  ? "var(--purple)" : undefined,
+              }}
+              onClick={() => {
+                setProvider(f.provider);
+                setModel(f.model);
+                setBase(f.base);
+              }}
+            >
+              <span style={{ fontWeight: 650, display: "block" }}>⚡ {f.label}</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>{f.note}</span>
+            </button>
+          ))}
+        </div>
 
         <div className="prop-row" style={{ marginBottom: 10 }}>
           <span className="lbl">Provider</span>
@@ -110,7 +173,7 @@ export function AiKeySettings({
           </select>
         </div>
 
-        <div className="prop-row" style={{ marginBottom: 10 }}>
+        <div className="prop-row" style={{ marginBottom: 4 }}>
           <span className="lbl">API key</span>
           <input
             className="text-input"
@@ -121,6 +184,19 @@ export function AiKeySettings({
             onChange={(e) => setKey(e.target.value)}
           />
         </div>
+        {(() => {
+          const link =
+            provider === "custom"
+              ? FREE_PRESETS.find((f) => f.base && f.base === base)?.link ?? ""
+              : KEY_LINKS[provider];
+          return link ? (
+            <p style={{ fontSize: 12, margin: "0 0 10px", textAlign: "right" }}>
+              <a href={link} target="_blank" rel="noreferrer">Get a free key ↗</a>
+            </p>
+          ) : (
+            <div style={{ height: 10 }} />
+          );
+        })()}
 
         <div className="prop-row" style={{ marginBottom: 10 }}>
           <span className="lbl">Model</span>

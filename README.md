@@ -5,8 +5,8 @@ connectors like Lucidchart, instant no-login drawing and link-sharing like
 Excalidraw, plus an AI co-editor that edits the board with you (bring your
 own API key).
 
-> **▶ Try it now: <https://draw-web-production-6b3d.up.railway.app>**
-> (moving to **draw.noddle.dev**) — no sign-up, you're drawing in one second.
+> **▶ Try it now: <https://draw.noddle.dev>** — no sign-up, you're drawing
+> in one second.
 
 Part of the [**Noddle**](https://github.com/noddle-dev) open-source suite.
 
@@ -83,7 +83,8 @@ configured. Copy `.env.example` to `.env` and fill in what you need:
 |---|---|
 | `DATABASE_URL` | Postgres persistence (schema auto-migrates at boot). Absent → file storage. |
 | `NODDLE_ALLOWED_ORIGINS` | CORS allowlist for dev tooling (prod is same-origin). |
-| `DATABRICKS_*` | Optional shared server AI pool. Most self-hosters skip this — users bring their own AI key in the app instead. |
+| `OPENROUTER_POOL_KEY` | Optional **zero-cost free tier**: key-less visitors ride OpenRouter `:free` models on this key (tip: a one-time $10 account top-up unlocks 1,000 free-model requests/day at $0). Guarded by per-IP limits (`POOL_RPM_PER_IP`/`POOL_RPD_PER_IP`), a global `POOL_DAILY_BUDGET`, and optional Cloudflare Turnstile (`TURNSTILE_SECRET` + `TURNSTILE_SITE_KEY`). |
+| `DATABRICKS_*` | Optional private server AI pool (takes priority over the free tier). |
 | `S3_*` | Optional S3-compatible object storage for log shipping/backups. |
 
 ## Architecture (short version)

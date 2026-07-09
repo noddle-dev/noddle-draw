@@ -12,6 +12,7 @@ import { useEditorStore } from "../../state/editorStore";
 import { useCollabStore, type RemoteCursor } from "../../state/collabStore";
 import { usePagesStore } from "../../state/pagesStore";
 import { getAiKeyConfig } from "../../shared/api/client";
+import { poolInfoSync } from "../../shared/poolConfig";
 import { AiKeySettings } from "../ai/AiKeySettings";
 import { askClaudeEdit } from "./claudeEdit";
 
@@ -83,7 +84,7 @@ export function CanvasCollab() {
     if (!t) return;
     // BYOK gate — without a key the request can only 503; prompt for the key
     // and KEEP the draft so it sends after configuring.
-    if (!getAiKeyConfig()) {
+    if (!getAiKeyConfig() && !(poolInfoSync()?.pool_ai)) {
       setKeyModalOpen(true);
       return;
     }

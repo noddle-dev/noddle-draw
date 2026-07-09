@@ -26,6 +26,15 @@ services:
       - DATABRICKS_TOKEN
       - DATABRICKS_CONFIG_PROFILE
       - DATABRICKS_CLAUDE_ENDPOINT
+      # Optional zero-cost shared AI tier (OpenRouter :free models) — key-less
+      # visitors ride this behind per-IP + daily-budget guards.
+      - OPENROUTER_POOL_KEY
+      - POOL_MODEL
+      - POOL_RPM_PER_IP
+      - POOL_RPD_PER_IP
+      - POOL_DAILY_BUDGET
+      - TURNSTILE_SECRET
+      - TURNSTILE_SITE_KEY
       - NODDLE_ALLOWED_ORIGINS
       # Optional object storage (B2/R2, S3-compatible) — rotated log segments.
       - S3_ENDPOINT_URL
