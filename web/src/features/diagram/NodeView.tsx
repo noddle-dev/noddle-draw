@@ -64,7 +64,9 @@ export function NodeView({
     if (panState.spaceHeld) return; // Space-pan owns the gesture — hand drags the page
     e.stopPropagation();
     const d = useDiagramStore.getState();
-    let sel = d.diagramSelection.filter((id) => d.nodes[id]); // nodes only
+    // Keep both nodes AND edges — mixed selections group/delete together;
+    // the drag below only moves the node ids among them.
+    let sel = d.diagramSelection.filter((id) => d.nodes[id] || d.edges[id]);
     // A grouped node selects/deselects its whole group (⌘G unit).
     const gid = d.nodes[node.id]?.groupId;
     const members = gid
@@ -182,8 +184,10 @@ export function NodeView({
           exporter bake the exact same motion deterministically. */}
       <g
         opacity={nodeOpacity}
-        // Rotation wraps shape+text only — halo, selection box, grips and
-        // ports stay axis-aligned (the bbox model the router/ports use).
+        // Rotation wraps shape+text; the selection box, grips and rotate
+        // handle carry the SAME transform (drawn outside this group so the
+        // idle animation never wobbles them). Halo and ports stay
+        // axis-aligned — the bbox model the router/ports use.
         transform={node.rotation ? `rotate(${node.rotation} ${cx} ${cy})` : undefined}
         className={node.anim ? `node-anim node-anim-${node.anim}` : undefined}
         data-node-anim={node.anim ?? undefined}
@@ -245,6 +249,7 @@ export function NodeView({
           y={node.y - 3}
           width={node.w + 6}
           height={node.h + 6}
+          transform={chromeRotate(node)}
           fill="none"
           stroke={SELECT_STROKE}
           strokeWidth={1.5}
@@ -269,6 +274,17 @@ export function NodeView({
  * by the camera zoom, so they stay grabbable at any zoom. Dragging mutates
  * x/y/w/h through updateNode (min 20); connected edges re-route automatically.
  */
+/**
+ * Selection chrome (dashed box, resize grips, rotate zones/button) follows the
+ * node's rotation so it hugs the shape the user actually sees — same transform
+ * as the shape group: degrees clockwise around the bbox center.
+ */
+function chromeRotate(node: DiagramNode): string | undefined {
+  return node.rotation
+    ? `rotate(${node.rotation} ${node.x + node.w / 2} ${node.y + node.h / 2})`
+    : undefined;
+}
+
 interface HandleRole {
   id: string;
   fx: number;
@@ -364,7 +380,7 @@ export function RotateHandle({ node }: { node: DiagramNode }) {
   const by = node.y - 24 / z;
 
   return (
-    <g data-editor-only="1">
+    <g data-editor-only="1" transform={chromeRotate(node)}>
       {corners.map((c, i) => (
         <circle
           key={i}
@@ -398,6 +414,9 @@ export function RotateHandle({ node }: { node: DiagramNode }) {
         <text
           x={bx}
           y={by}
+          // Counter-rotate: the button orbits the rotated frame but the
+          // glyph itself stays upright.
+          transform={node.rotation ? `rotate(${-node.rotation} ${bx} ${by})` : undefined}
           textAnchor="middle"
           dominantBaseline="central"
           fontSize={12 / z}
@@ -426,18 +445,35 @@ function ResizeHandles({ node }: { node: DiagramNode }) {
       const content = refs.content;
       const start = screenToContent(content, e.clientX, e.clientY);
       const o = { x: node.x, y: node.y, w: node.w, h: node.h };
+      // Rotated node: the grips live on the ROTATED frame, so resize in the
+      // node's local axes — inverse-rotate the pointer delta, apply the
+      // axis-aligned math, then re-anchor the center so the grabbed grip
+      // tracks the pointer and the opposite edge stays put on screen.
+      const th = ((node.rotation ?? 0) * Math.PI) / 180;
+      const cos = Math.cos(th);
+      const sin = Math.sin(th);
       const d = useDiagramStore.getState();
       d.setDraggingId(node.id); // guard against collab merge yanking it
 
       const move = (ev: PointerEvent) => {
         const p = screenToContent(content, ev.clientX, ev.clientY);
-        const dx = p.x - start.x;
-        const dy = p.y - start.y;
+        const wdx = p.x - start.x;
+        const wdy = p.y - start.y;
+        const dx = th ? wdx * cos + wdy * sin : wdx;
+        const dy = th ? -wdx * sin + wdy * cos : wdy;
         let { x, y, w, h } = o;
         if (role.L) { const right = o.x + o.w; w = Math.max(min, o.w - dx); x = right - w; }
         if (role.R) { w = Math.max(min, o.w + dx); }
         if (role.T) { const bot = o.y + o.h; h = Math.max(min, o.h - dy); y = bot - h; }
         if (role.B) { h = Math.max(min, o.h + dy); }
+        if (th) {
+          // The center moved in LOCAL coords; rotation happens around the
+          // (new) center, so map that center displacement back to world.
+          const mx = x + w / 2 - (o.x + o.w / 2);
+          const my = y + h / 2 - (o.y + o.h / 2);
+          x = o.x + o.w / 2 + mx * cos - my * sin - w / 2;
+          y = o.y + o.h / 2 + mx * sin + my * cos - h / 2;
+        }
         useDiagramStore.getState().updateNode(node.id, { x, y, w, h });
       };
       const up = () => {
@@ -450,7 +486,7 @@ function ResizeHandles({ node }: { node: DiagramNode }) {
     };
 
   return (
-    <g data-editor-only="1">
+    <g data-editor-only="1" transform={chromeRotate(node)}>
       {HANDLE_ROLES.map((r) => {
         const hx = node.x + node.w * r.fx;
         const hy = node.y + node.h * r.fy;

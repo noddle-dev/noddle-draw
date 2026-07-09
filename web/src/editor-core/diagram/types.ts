@@ -16,6 +16,9 @@ export type NodeKind =
   | "rounded"
   | "ellipse"
   | "diamond"
+  // label-only element: no outline/fill, just the editable text block
+  // (renderer in features/diagram/shapes/basic.tsx)
+  | "text"
   // flowchart family (rendered in features/diagram/ShapePalette.shapeElement)
   | "process"
   | "terminator"

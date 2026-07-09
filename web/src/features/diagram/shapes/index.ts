@@ -8,6 +8,7 @@
  * group module. No central switch edits.
  */
 import { arrowShapes } from "./arrows";
+import { basicShapes } from "./basic";
 import { flowchartShapes } from "./flowchart";
 import { geometricShapes } from "./geometric";
 import { umlShapes } from "./uml";
@@ -16,6 +17,7 @@ import type { ShapeRenderer } from "./util";
 export type { ShapeRenderer } from "./util";
 
 export const SHAPE_RENDERERS: Record<string, ShapeRenderer> = {
+  ...basicShapes,
   ...geometricShapes,
   ...flowchartShapes,
   ...arrowShapes,

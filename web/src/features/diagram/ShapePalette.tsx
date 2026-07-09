@@ -397,6 +397,7 @@ const BASIC: PaletteEntry[] = [
   { kind: "rounded", label: "Rounded", glyph: "▢" },
   { kind: "ellipse", label: "Ellipse", glyph: "◯" },
   { kind: "diamond", label: "Diamond", glyph: "◇" },
+  { kind: "text", label: "Text", glyph: "T" },
 ];
 
 /** Palette entries for a shapeDefs group (keeps the data catalog the single
@@ -502,6 +503,16 @@ export function inUseEntries(nodes: DiagramNode[]): PaletteEntry[] {
 
 /** A tiny SVG preview of a catalog entry, used inside a palette cell. */
 export function MiniGlyph({ entry }: { entry: PaletteEntry }) {
+  // The text element renders no shape at all — preview it as a letter.
+  if (entry.kind === "text") {
+    return (
+      <svg viewBox="0 0 44 32" width="100%" height="100%" style={{ display: "block" }} aria-hidden="true">
+        <text x={22} y={17} textAnchor="middle" dominantBaseline="central" fontSize={20} fontWeight={600} fill="#5b6472">
+          T
+        </text>
+      </svg>
+    );
+  }
   const node: DiagramNode =
     entry.kind === "icon"
       ? {

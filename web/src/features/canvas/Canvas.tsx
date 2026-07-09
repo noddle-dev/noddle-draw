@@ -35,6 +35,7 @@ import { useTextEdit } from "./useTextEdit";
 import { panState } from "../../state/panState";
 import { DiagramLayer } from "../diagram";
 import { beginNodeTextEdit } from "../diagram/nodeTextEdit";
+import { edgePath, polylineIntersectsRect } from "../../editor-core/diagram";
 
 type DragHandlers = {
   move: (e: PointerEvent) => void;
@@ -177,7 +178,9 @@ export function Canvas() {
           const hits = marqueeHits(content, p0, p1);
           const base = ev.shiftKey ? s().selection : [];
           s().setSelection([...new Set([...base, ...hits])] as SceneObject[]);
-          // Lucid-style: the marquee also selects diagram nodes it intersects.
+          // Lucid-style: the marquee also selects diagram nodes AND the
+          // connectors it touches, so a rubber-band sweep grabs a whole
+          // sub-graph in one gesture (then ⌘G groups it, Delete removes it).
           const ds = useDiagramStore.getState();
           const x0 = Math.min(p0.x, p1.x);
           const y0 = Math.min(p0.y, p1.y);
@@ -188,8 +191,17 @@ export function Canvas() {
               (n) => n.x < x1 && n.x + n.w > x0 && n.y < y1 && n.y + n.h > y0,
             )
             .map((n) => n.id);
+          const rect = { x0, y0, x1, y1 };
+          const edgeHits = Object.values(ds.edges)
+            .filter((ed) => {
+              const g = edgePath(ed, ds.nodes);
+              return g ? polylineIntersectsRect(g.points, rect) : false;
+            })
+            .map((ed) => ed.id);
           const dsBase = ev.shiftKey ? ds.diagramSelection : [];
-          ds.setDiagramSelection([...new Set([...dsBase, ...nodeHits])]);
+          ds.setDiagramSelection([
+            ...new Set([...dsBase, ...nodeHits, ...edgeHits]),
+          ]);
         },
       };
     };
@@ -264,7 +276,10 @@ export function Canvas() {
       s().setCam({ ...cam, x: cam.x - dx, y: cam.y - dy });
     };
 
-    const localTag = (n: Element) => n.tagName.replace(/^.*:/, "");
+    // Null-safe: the parent walk can leave the SVG (host div → document),
+    // where tagName is undefined — treat those as "not a text element".
+    const localTag = (n: Node) =>
+      (n as Element).tagName?.replace(/^.*:/, "") ?? "";
     const onDblClick = (e: MouseEvent) => {
       // Diagram nodes/edges own their own dblclick (inline text edit).
       if ((e.target as Element).closest("#diagram-layer")) return;
@@ -276,15 +291,27 @@ export function Canvas() {
         node && localTag(node as Element) === "text"
           ? (node as SVGTextElement)
           : null;
+      let obj: SceneObject | null = null;
       if (!textEl) {
-        const obj = topObject(
+        obj = topObject(
           content,
           document.elementFromPoint(e.clientX, e.clientY),
         );
         textEl = obj ? obj.querySelector("text") : null;
       }
       if (!textEl) {
-        s().setStatus("This object has no text to edit.");
+        if (obj) {
+          s().setStatus("This object has no text to edit.");
+          return;
+        }
+        // Empty canvas: double-click mints a standalone TEXT element at the
+        // cursor and opens its editor (draw.io-style "add text").
+        const p = screenToContent(content, e.clientX, e.clientY);
+        const ds = useDiagramStore.getState();
+        ds.setDiagramMode(true);
+        const id = ds.addNodeAt("text", p, { text: "" });
+        const created = useDiagramStore.getState().nodes[id];
+        if (created) beginNodeTextEdit(created);
         return;
       }
       beginTextEdit(textEl);

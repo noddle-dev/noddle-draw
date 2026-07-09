@@ -85,6 +85,15 @@ export function beginNodeTextEdit(
     if (done) return;
     done = true;
     if (svgLabel) svgLabel.style.visibility = "";
+    // A TEXT element with nothing in it is invisible and unfindable — treat
+    // an empty commit (or a cancelled brand-new one) as "never mind".
+    if (node.kind === "text" && (commit ? inp.value : node.text).trim() === "") {
+      const ds = useDiagramStore.getState();
+      ds.setDiagramSelection([node.id]);
+      ds.deleteSelectedDiagram();
+      inp.remove();
+      return;
+    }
     if (commit && inp.value !== node.text) {
       useDiagramStore.getState().setNodeText(node.id, inp.value);
       useEditorStore.getState().setStatus("Text updated.", "ok");

@@ -191,6 +191,46 @@ export function tOfPoint(points: Vec[], p: Vec): number {
   return bestLen / total;
 }
 
+/**
+ * Does any part of the polyline lie inside the axis-aligned rect?
+ * Used by the marquee so connectors co-select with the shapes they cross.
+ * Segments are clipped Liang–Barsky style, so diagonal (straight-routed)
+ * edges that merely pass through the rect still count.
+ */
+export function polylineIntersectsRect(
+  points: Vec[],
+  r: { x0: number; y0: number; x1: number; y1: number },
+): boolean {
+  const clipSeg = (a: Vec, b: Vec): boolean => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    let t0 = 0;
+    let t1 = 1;
+    const clip = (p: number, q: number): boolean => {
+      if (p === 0) return q >= 0;
+      const t = q / p;
+      if (p < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+      return true;
+    };
+    return (
+      clip(-dx, a.x - r.x0) &&
+      clip(dx, r.x1 - a.x) &&
+      clip(-dy, a.y - r.y0) &&
+      clip(dy, r.y1 - a.y)
+    );
+  };
+  for (let i = 1; i < points.length; i++) {
+    if (clipSeg(points[i - 1], points[i])) return true;
+  }
+  return false;
+}
+
 function toPath(points: Vec[]): string {
   return points
     .map((p, i) => `${i === 0 ? "M" : "L"} ${Math.round(p.x * 10) / 10} ${Math.round(p.y * 10) / 10}`)

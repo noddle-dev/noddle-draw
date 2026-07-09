@@ -74,14 +74,25 @@ There is no Python linter/formatter config checked in; match surrounding style.
 - BYOK is PER-REQUEST: the browser keeps `{provider,key,model,base}` in
   `localStorage["noddle.aiKey"]` and sends `X-AI-Provider/X-AI-Key/X-AI-Model/
   X-AI-Base` headers; `api/ai.py::_resolve_backend` validates them
-  (provider ∈ `AI_PROVIDERS` in `services/ai.py`; `custom` needs `X-AI-Base`).
-  No key → shared Databricks pool when `AIService.pool_available()` → else 503.
-  The server never stores or logs the key. New AI headers must also be added
-  to CORS `allow_headers` in `main.py`.
+  (provider ∈ `AI_PROVIDERS` in `services/ai.py`; `openrouter` is a preset
+  base+model, `custom` needs `X-AI-Base`). The server never stores or logs the
+  key. New AI headers must also be added to CORS `allow_headers` in `main.py`.
+- No key → fallback chain in `_resolve_backend`: Databricks pool when
+  `AIService.pool_available()` → `FreePool` (`services/pool.py`, OpenRouter
+  `:free` models via `OPENROUTER_POOL_KEY`) → 503. FreePool fails closed
+  behind per-IP rate limits, a global daily budget and optional Cloudflare
+  Turnstile (`TURNSTILE_SECRET` set ⇒ requests need `X-Turnstile-Token`);
+  its counters are in-memory (another single-instance dependency).
+- AI edits 3-way MERGE onto the current board (snapshot the model saw vs its
+  output vs the live board) — only objects the model actually changed are
+  applied, so edits made while it works survive. Don't regress to
+  replace-the-board.
 - Background image→board jobs are bucketed by `X-Client-Id` (an opaque UUID in
   `localStorage["noddle.clientId"]`); finished jobs create ordinary anonymous
-  boards. `GET /api/config` → `{"pool_ai": bool}` drives the frontend's
-  backend picker (`features/ai/BackendSelect` + `AiKeySettings`).
+  boards. `GET /api/config` → `{"pool_ai": bool, "turnstile_site_key":
+  str|null}` (`pool_ai` covers Databricks OR FreePool) drives the frontend's
+  backend picker (`features/ai/BackendSelect` + `AiKeySettings`,
+  `shared/poolConfig.ts`).
 
 ### Frontend
 - `editor-core/` is **pure TS** (no React/DOM): selection, transform, camera,

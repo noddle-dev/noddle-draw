@@ -28,6 +28,22 @@ const DIRS: { dir: Dir; dx: number; dy: number; rel: Vec }[] = [
   { dir: "w", dx: -1, dy: 0, rel: { x: 0, y: 0.5 } },
 ];
 
+/**
+ * Half-extents of the node's ROTATED axis-aligned bounding box. The arrows
+ * keep absolute N/E/S/W semantics (spawned shapes land on the world grid),
+ * so they sit just outside the rotated silhouette instead of rotating with it.
+ */
+function halfExtents(node: DiagramNode): { hw: number; hh: number } {
+  if (!node.rotation) return { hw: node.w / 2, hh: node.h / 2 };
+  const th = (node.rotation * Math.PI) / 180;
+  const c = Math.abs(Math.cos(th));
+  const s = Math.abs(Math.sin(th));
+  return {
+    hw: (node.w / 2) * c + (node.h / 2) * s,
+    hh: (node.w / 2) * s + (node.h / 2) * c,
+  };
+}
+
 function mintEdgeId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID().slice(0, 8);
@@ -73,9 +89,10 @@ export function DirectionalArrows({ node }: { node: DiagramNode }) {
     const halfH = (h ?? 90) / 2;
     const cx = src.x + src.w / 2;
     const cy = src.y + src.h / 2;
+    const ext = halfExtents(src);
     const center = {
-      x: cx + d.dx * (src.w / 2 + GAP + halfW),
-      y: cy + d.dy * (src.h / 2 + GAP + halfH),
+      x: cx + d.dx * (ext.hw + GAP + halfW),
+      y: cy + d.dy * (ext.hh + GAP + halfH),
     };
     const newId = ds.addNodeAt(k, center, {
       ...(w != null && h != null ? { w, h } : {}),
@@ -111,14 +128,15 @@ export function DirectionalArrows({ node }: { node: DiagramNode }) {
 
   const cx = node.x + node.w / 2;
   const cy = node.y + node.h / 2;
+  const { hw, hh } = halfExtents(node);
   const OFF = 26 * u; // chevron distance beyond the border
   const S = 9 * u; // chevron half-size
 
   return (
     <g data-editor-only="1" onPointerEnter={() => { if (picker) showPicker(picker); }} onPointerLeave={schedulePickerHide}>
       {DIRS.map((d) => {
-        const ax = cx + d.dx * (node.w / 2 + OFF);
-        const ay = cy + d.dy * (node.h / 2 + OFF);
+        const ax = cx + d.dx * (hw + OFF);
+        const ay = cy + d.dy * (hh + OFF);
         // chevron pointing outward
         const rot = d.dir === "e" ? 0 : d.dir === "s" ? 90 : d.dir === "w" ? 180 : -90;
         const open = picker === d.dir;
@@ -128,8 +146,8 @@ export function DirectionalArrows({ node }: { node: DiagramNode }) {
                 so the pointer never "falls off" while traveling to it */}
             {open && (
               <rect
-                x={d.dx !== 0 ? cx + (d.dx > 0 ? node.w / 2 : -node.w / 2 - 96 * u) : cx - 30 * u}
-                y={d.dy !== 0 ? cy + (d.dy > 0 ? node.h / 2 : -node.h / 2 - 96 * u) : cy - 30 * u}
+                x={d.dx !== 0 ? cx + (d.dx > 0 ? hw : -hw - 96 * u) : cx - 30 * u}
+                y={d.dy !== 0 ? cy + (d.dy > 0 ? hh : -hh - 96 * u) : cy - 30 * u}
                 width={d.dx !== 0 ? 96 * u : 60 * u}
                 height={d.dy !== 0 ? 96 * u : 60 * u}
                 fill="transparent"
@@ -181,14 +199,15 @@ function ShapePicker({
   const H = BTN * PICKER_KINDS.length + PAD * 2;
   const cx = node.x + node.w / 2;
   const cy = node.y + node.h / 2;
+  const { hw, hh } = halfExtents(node);
   // panel sits just beyond the chevron, centered on the axis
   const px =
     d.dx !== 0
-      ? cx + d.dx * (node.w / 2 + 44 * u) + (d.dx > 0 ? 0 : -W)
+      ? cx + d.dx * (hw + 44 * u) + (d.dx > 0 ? 0 : -W)
       : cx - W / 2;
   const py =
     d.dy !== 0
-      ? cy + d.dy * (node.h / 2 + 44 * u) + (d.dy > 0 ? 0 : -H)
+      ? cy + d.dy * (hh + 44 * u) + (d.dy > 0 ? 0 : -H)
       : cy - H / 2;
 
   const glyph = (k: NodeKind, x: number, y: number, s: number) => {

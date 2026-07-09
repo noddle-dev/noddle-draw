@@ -67,6 +67,7 @@ export const SHAPE_DEFS: ShapeDef[] = [
   { kind: "rounded", group: "basic", label: "Rounded", glyph: "▢", size: { w: 140, h: 80 }, text: "Step" },
   { kind: "ellipse", group: "basic", label: "Ellipse", glyph: "◯", size: { w: 140, h: 90 }, text: "Start" },
   { kind: "diamond", group: "basic", label: "Diamond", glyph: "◇", size: { w: 140, h: 100 }, text: "Decision", polygon: DIAMOND },
+  { kind: "text", group: "basic", label: "Text", glyph: "T", size: { w: 160, h: 40 }, text: "Text" },
 
   // ---- geometric -----------------------------------------------------------
   { kind: "triangle", group: "geometric", label: "Triangle", glyph: "△", size: { w: 130, h: 110 }, text: "Triangle", polygon: TRIANGLE },

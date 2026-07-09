@@ -163,7 +163,17 @@ export function EdgeView({
     if (panState.spaceHeld) return; // hand-pan wins
     if (e.button !== 0) return;
     e.stopPropagation();
-    useDiagramStore.getState().setDiagramSelection([edge.id]);
+    const d = useDiagramStore.getState();
+    const sel = d.diagramSelection;
+    if (e.shiftKey) {
+      // Shift-click extends/toggles — edges co-select with shapes, so a
+      // mixed selection can be grouped (⌘G) or deleted in one go.
+      d.setDiagramSelection(
+        sel.includes(edge.id) ? sel.filter((id) => id !== edge.id) : [...sel, edge.id],
+      );
+    } else if (!sel.includes(edge.id)) {
+      d.setDiagramSelection([edge.id]);
+    }
   };
 
   // Label/dblclick anchor: the true middle of the (possibly multi-corner)
