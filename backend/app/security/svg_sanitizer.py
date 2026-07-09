@@ -139,6 +139,13 @@ def sanitize_svg(raw: str) -> str:
     # Register the default namespace so serialization stays clean.
     ET.register_namespace("", SVG_NS)
     ET.register_namespace("xlink", XLINK_NS)
+    # Tolerance: content that uses xlink:href without declaring the xlink
+    # namespace on the root (client-serialized boards embedding uploaded SVG
+    # fragments) is otherwise an "unbound prefix" hard parse error. Injecting
+    # the declaration is safe — the attribute values still go through
+    # _clean_href like any other href.
+    if "xlink:" in raw and "xmlns:xlink" not in raw:
+        raw = raw.replace("<svg", f'<svg xmlns:xlink="{XLINK_NS}"', 1)
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as e:

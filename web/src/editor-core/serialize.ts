@@ -87,5 +87,8 @@ export function currentSvgString(content: SVGGElement, artboard: Artboard): stri
   const { w, h } = artboard;
   const ox = artboard.ox ?? 0;
   const oy = artboard.oy ?? 0;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${content.innerHTML}</svg>`;
+  // xmlns:xlink is declared unconditionally: uploaded SVG content often uses
+  // xlink:href (kept by the sanitizer) — without the declaration the wrapper
+  // is not well-formed XML and every save is rejected ("unbound prefix").
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${content.innerHTML}</svg>`;
 }

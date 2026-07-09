@@ -1,40 +1,65 @@
-# ◇ noddle
+# ◇ noddle draw
 
 **Open-source anonymous diagram board** — structured shapes and smart
 connectors like Lucidchart, instant no-login drawing and link-sharing like
-Excalidraw, plus an optional AI co-editor that edits the board with you
-(bring your own API key). Live at **draw.noddle.dev**.
+Excalidraw, plus an AI co-editor that edits the board with you (bring your
+own API key).
 
-- ⚡ **Zero friction** — open the site, you're drawing. No accounts, no
-  workspaces: your identity lives in your browser and the board URL is the
-  sharing capability (Excalidraw-style). `/` reopens the board you were
-  working on.
-- 🎨 **Real diagramming** — flowchart shapes, orthogonal auto-routed arrows
-  (A\* elbow routing with draggable waypoints), containers, multi-page boards,
-  stencil libraries, text wrap, align/distribute, full keyboard shortcuts.
-- 👥 **Live collaboration** — shared cursors, presence, per-page state sync
-  over WebSocket. Share a link, draw together. Anonymous comment threads.
-- ✦ **AI co-editor (optional, BYOK)** — chat with the board: "add an
-  error-handling branch", "group these by tier", image→diagram conversion
-  (sketch/whiteboard photo → editable shapes), text/Mermaid→diagram. Your
-  Anthropic / OpenAI / Gemini / OpenRouter key stays in your browser and rides
-  each request — the server never stores it. Without a key the AI simply
-  stays off (or self-hosters can configure a shared Databricks pool).
+> **▶ Try it now: <https://draw-web-production-6b3d.up.railway.app>**
+> (moving to **draw.noddle.dev**) — no sign-up, you're drawing in one second.
+
+Part of the [**Noddle**](https://github.com/noddle-dev) open-source suite.
+
+## Draw together — the link is the invite
+
+Share the board URL and people are co-editing instantly: shared cursors,
+presence, live state sync over WebSocket. No accounts anywhere — your identity
+is auto-generated in your browser (rename it in the Share dialog).
+
+![Live collaboration — two anonymous guests co-editing](docs/media/collab.gif)
+
+## Real diagramming, with living connectors
+
+Flowchart shapes, containers, multi-page boards, stencil libraries, text wrap,
+align/distribute, full keyboard shortcuts — and orthogonal auto-routed arrows
+(A\* elbow routing with draggable waypoints) that can **animate**: dash, dots,
+beam or pulse flows to show data moving through your system.
+
+![Animated edges — beam flows on a system diagram](docs/media/animated.gif)
+
+## AI co-editor — your key, your browser (BYOK)
+
+Chat with the board: *"add an error-handling branch"*, *"group these by
+tier"*, image→diagram conversion (whiteboard photo → editable shapes),
+text/Mermaid→diagram. Your Anthropic / OpenAI / Gemini / OpenRouter key stays
+in **your browser's localStorage** and rides each request as a header — the
+server proxies the call and never stores it. A **Test** button proves the key
+works before you save it. No key? The AI simply stays off.
+
+![BYOK — add and test your own AI key](docs/media/byok.gif)
+
+## Features
+
+- ⚡ **Zero friction** — open the site, you're drawing. `/` reopens the board
+  you were working on; the board URL is the sharing capability.
+- 👥 **Live collaboration** — cursors, presence, per-page sync + anonymous
+  comment threads pinned to shapes.
+- ✦ **AI co-editor (BYOK)** — concurrent-edit safe: while the AI works you can
+  keep editing; its changes merge onto your latest board instead of replacing it.
 - 📤 **Export** — SVG, PNG, animated GIF, per-page deck PNGs, Mermaid, and a
   re-importable board JSON. Imports draw.io files.
 - 🧩 **Agent-friendly** — a small [MCP server](mcp/) lets AI agents create and
   edit boards through the REST API (the board URL is the capability — no
   tokens needed).
 
-## Quick start
+## Self-host in one command
 
 ```bash
 docker compose up --build
 # → http://localhost:8000  — start drawing, no sign-up
 ```
 
-That's it: one container (FastAPI + prebuilt React SPA) plus Postgres.
-Without Docker:
+One container (FastAPI + prebuilt React SPA) plus Postgres. Without Docker:
 
 ```bash
 # backend
@@ -101,6 +126,12 @@ dead tables: `DROP TABLE users, sessions, tokens, teams, team_members,
 ai_settings, subscriptions, ls_webhook_events, billing_events,
 pricing_catalog, folders, document_shares, mentions, user_activity, ai_usage,
 games_leaderboard, notifications;`
+
+## Part of the Noddle suite
+
+noddle draw is built and maintained by the [noddle-dev](https://github.com/noddle-dev)
+organization. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+(short version: English only, tests green, respect the layering).
 
 ## License
 

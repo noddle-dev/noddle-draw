@@ -957,7 +957,7 @@ class AIService:
             "- Output must be COMPLETE valid JSON — never truncate the node or "
             "edge list; emit compact JSON (no pretty-printing).\n"
             '\nRespond with ONLY a JSON object (no prose, no code fences): '
-            '{"message":"<one short Vietnamese sentence about what you changed>",'
+            '{"message":"<one short sentence, in the user\'s language, about what you changed>",'
             '"diagram":{"nodes":[...],"edges":[...]}}\n\n'
         )
         if image:

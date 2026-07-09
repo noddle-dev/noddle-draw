@@ -406,7 +406,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       diagramHtml = clone.outerHTML;
     }
     const ox = artboard.ox ?? 0, oy = artboard.oy ?? 0;
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${contentClone.innerHTML}${diagramHtml}</svg>`;
+    // xmlns:xlink unconditionally — content may carry xlink:href (uploaded
+    // SVGs); without it the save is rejected as not-well-formed XML.
+    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${contentClone.innerHTML}${diagramHtml}</svg>`;
   },
 
   async refreshDocs() {
