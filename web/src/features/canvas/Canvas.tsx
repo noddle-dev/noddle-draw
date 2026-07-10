@@ -368,6 +368,7 @@ export function Canvas() {
         if (e.key === "[") { e.preventDefault(); useAppStore.getState().toggleLeftPanel(); return; }
         if (e.key === "]") { e.preventDefault(); useAppStore.getState().toggleRightPanel(); return; }
         if (e.key === "\\") { e.preventDefault(); useAppStore.getState().toggleFocusMode(); return; }
+        if (e.key === "?") { e.preventDefault(); useAppStore.getState().setShortcutsOpen(true); return; }
       }
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key.toLowerCase() === "z") {

@@ -414,6 +414,13 @@ export function EditorTopbar() {
         >
           ⤢
         </button>
+        <button
+          className="icon-btn"
+          title="Keyboard shortcuts (?)"
+          onClick={() => useAppStore.getState().setShortcutsOpen(true)}
+        >
+          ?
+        </button>
       </div>
 
       <div className="spacer" />

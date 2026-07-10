@@ -165,6 +165,9 @@ interface AppState {
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
   toggleFocusMode: (on?: boolean) => void;
+  /** Keyboard-shortcut cheat sheet (? opens, Esc/click closes). */
+  shortcutsOpen: boolean;
+  setShortcutsOpen: (open: boolean) => void;
 
   // ---- page settings ----
   gridOn: boolean;
@@ -286,6 +289,8 @@ export const useAppStore = create<AppState>((set) => ({
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
   toggleFocusMode: (on) =>
     set((s) => ({ focusMode: on ?? !s.focusMode })),
+  shortcutsOpen: false,
+  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
 
   gridOn: true,
   snapOn: true,

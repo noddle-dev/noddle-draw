@@ -639,6 +639,25 @@ button {
 .gen-modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-3xl); padding: 30px 34px; box-shadow: var(--shadow-pop); width: 380px; text-align: center; }
 .gen-modal .sp { width: 46px; height: 46px; margin: 0 auto 16px; border-radius: 50%; border: 3px solid var(--border-faint); border-top-color: var(--purple); animation: spin .8s linear infinite; }
 
+/* ---- keyboard shortcuts cheat sheet ---- */
+.shortcuts-modal { width: 640px; max-width: calc(100vw - 40px); text-align: left; padding: 22px 24px 18px; }
+.shortcuts-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.shortcuts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 26px; }
+.shortcuts-group-title { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.shortcuts-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.shortcuts-label { font-size: 13px; color: var(--text-2); }
+.shortcuts-keys { display: inline-flex; gap: 4px; flex-shrink: 0; }
+.shortcuts-modal kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 6px;
+  font: 500 11.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px;
+}
+.shortcuts-foot { margin-top: 16px; font-size: 11.5px; color: var(--muted); }
+.shortcuts-foot kbd { min-width: 16px; height: 17px; }
+@media (max-width: 560px) { .shortcuts-grid { grid-template-columns: 1fr; } }
+
 /* ---- auth modal (login/register — BRAND.md: landing illustration + wordmark) */
 .auth-modal { width: 800px; max-width: calc(100vw - 40px); padding: 0; overflow: hidden; text-align: left; }
 .auth-wrap { display: flex; align-items: stretch; }

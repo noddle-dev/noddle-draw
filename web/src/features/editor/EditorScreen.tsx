@@ -27,6 +27,7 @@ import { LeftPanel } from "./LeftPanel";
 import { RightPanel } from "./RightPanel";
 import { CanvasCollab } from "./CanvasCollab";
 import { CommentsLayer } from "../comments/CommentsLayer";
+import { ShortcutsModal } from "./ShortcutsModal";
 import { addImageToBoard, imageFromDataTransfer } from "./pasteImage";
 import { usePagesStore } from "../../state/pagesStore";
 
@@ -109,6 +110,7 @@ export function EditorScreen() {
   const leftPanelOpen = useAppStore((s) => s.leftPanelOpen);
   const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
   const focusMode = useAppStore((s) => s.focusMode);
+  const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
   const notFound = useEditorStore((s) => s.notFound);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
 
@@ -323,6 +325,7 @@ export function EditorScreen() {
       <StatusBar />
       {presenting && <PresentHud />}
       {focusMode && !presenting && <FocusHud />}
+      {shortcutsOpen && <ShortcutsModal />}
       {notFound && <BoardNotFound />}
     </div>
   );
