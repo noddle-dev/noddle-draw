@@ -33,12 +33,40 @@ system.
 
 Chat with the board: *"add an error-handling branch"*, *"group these by
 tier"*, image→diagram conversion (whiteboard photo → editable shapes),
-text/Mermaid→diagram. Your Anthropic / OpenAI / Gemini / OpenRouter key stays
-in **your browser's localStorage** and rides each request as a header — the
-server proxies the call and never stores it. A **Test** button proves the key
-works before you save it. No key? The AI simply stays off.
+text/Mermaid→diagram. Your key stays in **your browser's localStorage** and
+rides each request as a header — the server proxies the call and never stores
+it. A **Test** button proves the key works before you save it.
 
 ![BYOK — add and test your own AI key](docs/media/byok.gif)
+
+### Bring your own key
+
+Pick a provider in the AI-key dialog, paste a key, and you're set. The model
+field is optional — leave it blank for the provider's default.
+
+| Provider | Default model | Vision (image→diagram) |
+|---|---|---|
+| Anthropic (Claude) | `claude-opus-4-8` | ✅ |
+| OpenAI | `gpt-4o` | ✅ |
+| Google Gemini | `gemini-2.5-flash` | ✅ |
+| OpenRouter | you pick a `provider/model` slug | depends on model |
+| Custom (OpenAI-compatible) | you set the base URL + model | depends on model |
+
+### Free in ~2 minutes
+
+Two one-click presets in the dialog set the provider/model/base for you — you
+just paste a free key (no credit card):
+
+- **Google Gemini** — `gemini-2.5-flash`, free key from
+  [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Best all
+  round: vision + reliable JSON.
+- **Groq** — `openai/gpt-oss-120b` on the [Groq](https://console.groq.com/keys)
+  free tier via the Custom (OpenAI-compatible) provider. Blazing fast; text +
+  JSON (use Gemini when you need to turn a photo into a diagram).
+
+No key at all? If the operator has configured a server-side free pool
+(`OPENROUTER_POOL_KEY`), key-less visitors ride it automatically; otherwise the
+AI simply stays off until you add a key.
 
 ## Features
 
@@ -74,20 +102,8 @@ cd web && npm install && npm run dev   # → http://localhost:5173
 ```
 
 No database needed for local hacking — without `DATABASE_URL` everything
-persists to `backend/storage/` files.
-
-## Configuration
-
-Everything is optional; the app degrades gracefully when a feature isn't
-configured. Copy `.env.example` to `.env` and fill in what you need:
-
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | Postgres persistence (schema auto-migrates at boot). Absent → file storage. |
-| `NODDLE_ALLOWED_ORIGINS` | CORS allowlist for dev tooling (prod is same-origin). |
-| `OPENROUTER_POOL_KEY` | Optional **zero-cost free tier**: key-less visitors ride OpenRouter `:free` models on this key (tip: a one-time $10 account top-up unlocks 1,000 free-model requests/day at $0). Guarded by per-IP limits (`POOL_RPM_PER_IP`/`POOL_RPD_PER_IP`), a global `POOL_DAILY_BUDGET`, and optional Cloudflare Turnstile (`TURNSTILE_SECRET` + `TURNSTILE_SITE_KEY`). |
-| `DATABRICKS_*` | Optional private server AI pool (takes priority over the free tier). |
-| `S3_*` | Optional S3-compatible object storage for log shipping/backups. |
+persists to `backend/storage/` files. Every server setting is optional and the
+app degrades gracefully; see [`.env.example`](.env.example) for the full list.
 
 ## Architecture (short version)
 
@@ -115,23 +131,6 @@ never stores or logs them.
 Found a vulnerability? Please report it privately — see
 **[SECURITY.md](SECURITY.md)** for the reporting channel, scope, and threat
 model. Don't open a public issue for security problems.
-
-## Upgrading from the accounts-era build
-
-Older deployments (with users/teams/billing) keep their extra tables — this
-build simply stops using them. To make pre-existing boards reachable under the
-anonymous model, run once against your database:
-
-```sql
-UPDATE documents SET owner_id = NULL;
-UPDATE documents SET link_policy = 'edit' WHERE link_policy = 'private';
-```
-
-(Skip the second statement if some boards must stay dark.) Optional cleanup of
-dead tables: `DROP TABLE users, sessions, tokens, teams, team_members,
-ai_settings, subscriptions, ls_webhook_events, billing_events,
-pricing_catalog, folders, document_shares, mentions, user_activity, ai_usage,
-games_leaderboard, notifications;`
 
 ## Part of the Noddle suite
 

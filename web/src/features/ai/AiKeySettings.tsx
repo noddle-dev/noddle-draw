@@ -240,6 +240,16 @@ export function AiKeySettings({
           </p>
         )}
 
+        {/* Explain WHY Test/Save are disabled — otherwise a key-less form just
+            looks broken (the buttons grey out with no reason given). */}
+        {!canSave && (
+          <p className="muted" style={{ fontSize: 12, margin: "12px 0 0", lineHeight: 1.45 }}>
+            {provider === "custom" && !base.trim()
+              ? "Add the base URL and your API key to test and save."
+              : "Paste your API key to enable Test and Save — free keys take ~2 min via “Get a free key ↗”."}
+          </p>
+        )}
+
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
           {existing && (
             <button className="btn" style={{ color: "var(--danger)" }} onClick={remove}>
@@ -247,11 +257,21 @@ export function AiKeySettings({
             </button>
           )}
           <div style={{ flex: 1 }} />
-          <button className="btn" disabled={!canSave || testing} onClick={() => void test()}>
+          <button
+            className="btn"
+            disabled={!canSave || testing}
+            title={canSave ? "Send a tiny test request to your provider" : "Enter your API key first"}
+            onClick={() => void test()}
+          >
             {testing ? "Testing…" : "Test"}
           </button>
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" disabled={!canSave} onClick={save}>
+          <button
+            className="btn btn-primary"
+            disabled={!canSave}
+            title={canSave ? "Save the key in this browser" : "Enter your API key first"}
+            onClick={save}
+          >
             Save
           </button>
         </div>
