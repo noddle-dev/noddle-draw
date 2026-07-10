@@ -100,8 +100,14 @@ AI simply stays off until you add a key.
 ## Self-host in one command
 
 ```bash
-docker compose up --build
+docker run -p 8000:8000 -v noddle_draw:/app/backend/storage ghcr.io/noddle-dev/noddle-draw:latest
 # → http://localhost:8000  — start drawing, no sign-up
+```
+
+No image pull? Build it yourself with compose (also adds Postgres):
+
+```bash
+docker compose up --build
 ```
 
 One container (FastAPI + prebuilt React SPA) plus Postgres. Without Docker:
