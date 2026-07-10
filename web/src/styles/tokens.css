@@ -928,6 +928,9 @@ button {
 .editor-docname:hover { background: var(--panel-2); }
 .editor-docname-input { font-weight: 600; font-size: 13.5px; max-width: 260px; border: 1.5px solid var(--accent); border-radius: 6px; padding: 2px 6px; outline: none; background: #fff; color: var(--text); box-shadow: 0 0 0 3px var(--accent-soft); }
 .editor-undo { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
+.editor-viewtoggle { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
+/* A panel toggle reads "on" (rail visible) with the accent; off = muted. */
+.editor-viewtoggle .icon-btn.on { color: var(--accent); }
 .spacer { flex: 1; }
 .presence { display: flex; align-items: center; margin-right: 6px; }
 .presence .avatar { position: relative; width: 30px; height: 30px; border: 2px solid #fff; margin-left: -7px; font-size: 11px; cursor: pointer; }
@@ -1275,6 +1278,20 @@ button {
 .editor.embedding .editor-statusbar,
 .editor.embedding .canvas-chatbar,
 .editor.embedding .page-bar { display: none !important; }
+
+/* Collapsible rails ([ / ]) — the flex canvas reclaims the space. */
+.editor.hide-left .ed-panel.left { display: none; }
+.editor.hide-right .ed-panel.right { display: none; }
+
+/* Focus mode (\) — just the canvas (keeps the zoom widget); a small HUD
+   floats an exit. Mirrors present mode but stays in-page (no fullscreen). */
+.editor.focus .editor-topbar,
+.editor.focus .ed-panel,
+.editor.focus .editor-statusbar,
+.editor.focus .canvas-chatbar,
+.editor.focus .comment-resolved-chip,
+.editor.focus .page-bar { display: none !important; }
+
 .present-hud {
   position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px; z-index: 60;

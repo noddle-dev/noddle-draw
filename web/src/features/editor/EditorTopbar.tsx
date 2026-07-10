@@ -275,6 +275,8 @@ export function EditorTopbar() {
   const redo = useEditorStore((s) => s.redo);
   const save = useEditorStore((s) => s.save);
   const diagramMode = useDiagramStore((s) => s.diagramMode);
+  const leftPanelOpen = useAppStore((s) => s.leftPanelOpen);
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
 
   const { exportSvg, exportPng, exportDeckPng } = useExport();
   const [exportOpen, setExportOpen] = useState(false);
@@ -387,6 +389,31 @@ export function EditorTopbar() {
       <div className="editor-undo">
         <button className="icon-btn" title="Undo (⌘Z)" disabled={!canUndo} onClick={undo}>↶</button>
         <button className="icon-btn" title="Redo (⌘⇧Z)" disabled={!canRedo} onClick={redo}>↷</button>
+      </div>
+
+      <div className="editor-viewtoggle">
+        <button
+          className={`icon-btn${leftPanelOpen ? " on" : ""}`}
+          title={`${leftPanelOpen ? "Hide" : "Show"} left panel ([)`}
+          onClick={() => useAppStore.getState().toggleLeftPanel()}
+        >
+          ⇤
+        </button>
+        <button
+          className={`icon-btn${rightPanelOpen ? " on" : ""}`}
+          title={`${rightPanelOpen ? "Hide" : "Show"} right panel (])`}
+          onClick={() => useAppStore.getState().toggleRightPanel()}
+        >
+          ⇥
+        </button>
+        <button
+          className="icon-btn"
+          disabled={!docId}
+          title="Focus mode (\) — just the canvas, Esc to exit"
+          onClick={() => useAppStore.getState().toggleFocusMode(true)}
+        >
+          ⤢
+        </button>
       </div>
 
       <div className="spacer" />

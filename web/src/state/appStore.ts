@@ -157,6 +157,14 @@ interface AppState {
   /** Presentation mode (#16) — fullscreen, pages become slides (←/→, Esc). */
   presenting: boolean;
   setPresenting: (on: boolean) => void;
+  /** Left/right rail visibility — declutter without leaving the editor.
+   * Toggle with `[` / `]`; focus mode hides everything (`\`, Esc exits). */
+  leftPanelOpen: boolean;
+  rightPanelOpen: boolean;
+  focusMode: boolean;
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
+  toggleFocusMode: (on?: boolean) => void;
 
   // ---- page settings ----
   gridOn: boolean;
@@ -271,6 +279,13 @@ export const useAppStore = create<AppState>((set) => ({
   embedMode: false,
   presenting: false,
   setPresenting: (on) => set({ presenting: on }),
+  leftPanelOpen: true,
+  rightPanelOpen: true,
+  focusMode: false,
+  toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
+  toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
+  toggleFocusMode: (on) =>
+    set((s) => ({ focusMode: on ?? !s.focusMode })),
 
   gridOn: true,
   snapOn: true,

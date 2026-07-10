@@ -87,6 +87,18 @@ function PresentHud() {
   );
 }
 
+/** Focus mode HUD: a minimal exit affordance (all chrome is CSS-hidden). */
+function FocusHud() {
+  return (
+    <div className="present-hud focus-hud">
+      <span className="pg">Focus mode</span>
+      <button className="exit" onClick={() => useAppStore.getState().toggleFocusMode(false)}>
+        ✕ Exit (Esc)
+      </button>
+    </div>
+  );
+}
+
 export function EditorScreen() {
   const refs = useEditorStore((s) => s.refs);
   const docId = useEditorStore((s) => s.docId);
@@ -94,6 +106,9 @@ export function EditorScreen() {
   const pendingSvg = useAppStore((s) => s.pendingSvg);
   const embedMode = useAppStore((s) => s.embedMode);
   const presenting = useAppStore((s) => s.presenting);
+  const leftPanelOpen = useAppStore((s) => s.leftPanelOpen);
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
+  const focusMode = useAppStore((s) => s.focusMode);
   const notFound = useEditorStore((s) => s.notFound);
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
 
@@ -284,7 +299,14 @@ export function EditorScreen() {
 
   return (
     <div
-      className={`editor${presenting ? " presenting" : ""}${embedMode ? " embedding" : ""}`}
+      className={
+        "editor" +
+        (presenting ? " presenting" : "") +
+        (embedMode ? " embedding" : "") +
+        (focusMode ? " focus" : "") +
+        (!leftPanelOpen ? " hide-left" : "") +
+        (!rightPanelOpen ? " hide-right" : "")
+      }
     >
       <EditorTopbar />
       <div className="editor-body">
@@ -300,6 +322,7 @@ export function EditorScreen() {
       </div>
       <StatusBar />
       {presenting && <PresentHud />}
+      {focusMode && !presenting && <FocusHud />}
       {notFound && <BoardNotFound />}
     </div>
   );
