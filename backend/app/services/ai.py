@@ -61,6 +61,11 @@ from app.security.svg_sanitizer import sanitize_svg
 # via DATABRICKS_CLAUDE_ENDPOINT — endpoint names are workspace-specific.
 DEFAULT_ENDPOINT = "databricks-claude-opus-4-8"
 
+# A real product User-Agent — urllib's default "Python-urllib/3.x" is a known
+# scraper signature that Cloudflare-fronted APIs (e.g. Groq) reject with a 403
+# "error code: 1010", so every valid BYOK key otherwise failed.
+_USER_AGENT = "noddle-draw/1.0 (+https://draw.noddle.dev)"
+
 _HTTP_TIMEOUT = 150  # seconds per request — edit-diagram on a big board is slow
 # image→SVG asks for up to 8000 output tokens; slower models (full-size Claude,
 # some OpenRouter routes) legitimately exceed 150s. The call runs in the
@@ -671,6 +676,7 @@ class AIService:
             headers={
                 "Authorization": f"Bearer {auth.bearer()}",
                 "Content-Type": "application/json",
+                "User-Agent": _USER_AGENT,
             },
         )
         try:
@@ -719,7 +725,7 @@ class AIService:
         ).encode()
         req = urllib.request.Request(
             url, data=body, method="POST",
-            headers={"Content-Type": "application/json", **headers},
+            headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT, **headers},
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout or _HTTP_TIMEOUT) as r:
@@ -783,6 +789,7 @@ class AIService:
                 "x-api-key": key,
                 "anthropic-version": ANTHROPIC_VERSION,
                 "Content-Type": "application/json",
+                "User-Agent": _USER_AGENT,
             },
         )
         try:

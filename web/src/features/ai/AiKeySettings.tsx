@@ -54,9 +54,13 @@ const FREE_PRESETS: {
   {
     id: "groq",
     label: "Groq",
-    note: "free, very fast (Llama-4 vision)",
+    // Groq deprecated the Llama-4 vision models (2026-06); GPT-OSS 120B is
+    // their recommended free replacement — text + strong JSON, blazing fast.
+    // (Vision → use the Gemini preset.) Model ids churn: if Test 404s, pick a
+    // current one from console.groq.com/docs/models.
+    note: "free, very fast (GPT-OSS 120B)",
     provider: "custom",
-    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    model: "openai/gpt-oss-120b",
     base: "https://api.groq.com/openai/v1",
     link: "https://console.groq.com/keys",
   },
