@@ -50,6 +50,16 @@ class Settings:
 
     storage_dir: Path = field(default_factory=lambda: BACKEND_ROOT / "storage")
     allowed_origins: list[str] = field(default_factory=_default_origins)
+    # Optional privacy-friendly analytics: set PLAUSIBLE_DOMAIN (e.g.
+    # "draw.noddle.dev") and the served SPA shell gets the Plausible snippet.
+    # PLAUSIBLE_SRC overrides the script host for self-hosted Plausible.
+    plausible_domain: str | None = field(
+        default_factory=lambda: os.environ.get("PLAUSIBLE_DOMAIN") or None
+    )
+    plausible_src: str = field(
+        default_factory=lambda: os.environ.get("PLAUSIBLE_SRC")
+        or "https://plausible.io/js/script.js"
+    )
     # Optional Postgres persistence (postgresql://user:pass@host:5432/dbname).
     # Present + reachable → Postgres adapters; absent or unreachable → file
     # adapters with a boot warning, never a crash.
