@@ -33,9 +33,9 @@ from app.services.ai import ProviderSettings
 # upstream, so the OpenRouter call carries the whole list (`models` array) and
 # routes to the first one with capacity. Primary = vision + best JSON; the
 # rest are text-strong alternates. POOL_MODEL env overrides (same format).
+# NOTE: OpenRouter accepts at most 3 entries in the `models` array.
 DEFAULT_POOL_MODEL = (
     "google/gemma-4-26b-a4b-it:free,"
-    "google/gemma-4-31b-it:free,"
     "openai/gpt-oss-120b:free,"
     "meta-llama/llama-3.3-70b-instruct:free"
 )

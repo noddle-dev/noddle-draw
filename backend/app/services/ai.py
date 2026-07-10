@@ -628,7 +628,8 @@ class AIService:
             # free pool): OpenRouter's `models` array routes to the first one
             # with capacity, so a rate-limited :free model doesn't 429 the app.
             m = model or OPENROUTER_MODEL
-            chain = [s.strip() for s in m.split(",") if s.strip()]
+            # OpenRouter rejects `models` arrays longer than 3 — clamp.
+            chain = [s.strip() for s in m.split(",") if s.strip()][:3]
             extra = {"models": chain} if len(chain) > 1 else None
             return self._chat_openai_compatible(
                 f"{OPENROUTER_BASE}/chat/completions",
