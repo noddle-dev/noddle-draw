@@ -28,9 +28,17 @@ from collections import deque
 
 from app.services.ai import ProviderSettings
 
-# Verified free (price 0) on OpenRouter as of 2026-07: vision + structured
-# output. Free models rotate — the auto-router fallback survives churn.
-DEFAULT_POOL_MODEL = "google/gemma-4-26b-a4b-it:free"
+# Verified free (price 0) on OpenRouter as of 2026-07. A comma-separated
+# FALLBACK CHAIN: free models are shared and individually rate-limited
+# upstream, so the OpenRouter call carries the whole list (`models` array) and
+# routes to the first one with capacity. Primary = vision + best JSON; the
+# rest are text-strong alternates. POOL_MODEL env overrides (same format).
+DEFAULT_POOL_MODEL = (
+    "google/gemma-4-26b-a4b-it:free,"
+    "google/gemma-4-31b-it:free,"
+    "openai/gpt-oss-120b:free,"
+    "meta-llama/llama-3.3-70b-instruct:free"
+)
 
 _TURNSTILE_VERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 

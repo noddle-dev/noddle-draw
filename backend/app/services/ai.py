@@ -624,7 +624,12 @@ class AIService:
             # Preset aggregator — fixed base, model is a provider/model slug.
             # HTTP-Referer + X-Title are OpenRouter's recommended attribution
             # headers (some keys/apps require them; harmless otherwise).
+            # A comma-separated model value is a FALLBACK CHAIN (used by the
+            # free pool): OpenRouter's `models` array routes to the first one
+            # with capacity, so a rate-limited :free model doesn't 429 the app.
             m = model or OPENROUTER_MODEL
+            chain = [s.strip() for s in m.split(",") if s.strip()]
+            extra = {"models": chain} if len(chain) > 1 else None
             return self._chat_openai_compatible(
                 f"{OPENROUTER_BASE}/chat/completions",
                 {
@@ -632,10 +637,11 @@ class AIService:
                     "HTTP-Referer": "https://draw.noddle.dev",
                     "X-Title": "noddle draw",
                 },
-                m,
+                chain[0] if chain else m,
                 messages,
                 max_tokens,
                 timeout=timeout,
+                extra_body=extra,
             )
         if provider == "custom":
             # LiteLLM-style generic OpenAI-compatible provider: the user brings
@@ -717,11 +723,19 @@ class AIService:
         messages: list[dict],
         max_tokens: int,
         timeout: float | None = None,
+        extra_body: dict | None = None,
     ) -> str:
         """POST to any OpenAI-compatible /chat/completions endpoint (OpenAI,
-        Gemini's OpenAI shim, and — content-wise — the Databricks call)."""
+        Gemini's OpenAI shim, and — content-wise — the Databricks call).
+        ``extra_body`` merges provider-specific fields (e.g. OpenRouter's
+        ``models`` fallback array) into the payload."""
         body = json.dumps(
-            {"model": model, "messages": messages, "max_tokens": max_tokens}
+            {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                **(extra_body or {}),
+            }
         ).encode()
         req = urllib.request.Request(
             url, data=body, method="POST",
