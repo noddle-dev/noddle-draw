@@ -6,7 +6,7 @@
  * proxies the call and never stores the key (Excalidraw-style BYOK for an
  * account-less product).
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   api,
   getAiKeyConfig,
@@ -80,6 +80,7 @@ export function AiKeySettings({
   const [base, setBase] = useState(existing?.base ?? "");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const keyInputRef = useRef<HTMLInputElement>(null);
 
   const canSave =
     !!key.trim() && (provider !== "custom" || !!base.trim());
@@ -155,6 +156,9 @@ export function AiKeySettings({
                 setProvider(f.provider);
                 setModel(f.model);
                 setBase(f.base);
+                // The preset fills everything EXCEPT the key — put the caret
+                // where the user's one remaining step is.
+                keyInputRef.current?.focus();
               }}
             >
               <span style={{ fontWeight: 650, display: "block" }}>⚡ {f.label}</span>
@@ -186,6 +190,7 @@ export function AiKeySettings({
         <div className="prop-row" style={{ marginBottom: 4 }}>
           <span className="lbl">API key</span>
           <input
+            ref={keyInputRef}
             className="text-input"
             style={{ flex: 1 }}
             type="password"
