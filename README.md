@@ -1,5 +1,9 @@
 # ◇ noddle draw
 
+[![CI](https://github.com/noddle-dev/noddle-draw/actions/workflows/deploy.yml/badge.svg)](https://github.com/noddle-dev/noddle-draw/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Live](https://img.shields.io/badge/demo-draw.noddle.dev-7c3aed)](https://draw.noddle.dev)
+
 **Open-source anonymous diagram board** — structured shapes and smart
 connectors like Lucidchart, instant no-login drawing and link-sharing like
 Excalidraw, plus an AI co-editor that edits the board with you (bring your
@@ -20,12 +24,13 @@ is auto-generated in your browser (rename it in the Share dialog).
 
 ## Real diagramming, with living connectors
 
-Flowchart shapes, standalone text, containers, multi-page boards, stencil
-libraries, text wrap, align/distribute, rotation, grouping (`⌘G`), rubber-band
-select across shapes *and* connectors, full keyboard shortcuts — and orthogonal
-auto-routed arrows (A\* elbow routing with draggable waypoints) that can
-**animate**: dash, dots, beam or pulse flows to show data moving through your
-system.
+47 shape kinds (flowchart, geometric, block arrows, UML-lite), cloud stencils
+(AWS · Azure · GCP · Databricks · network), sticky notes, standalone text,
+images, containers, multi-page boards, 28 starter templates and your own saved
+"My shapes" — plus a hand-drawn sketch mode and idle shape animations
+(pulse/glow/breathe/wobble). Connectors are orthogonal and auto-routed
+(A\* elbow routing with draggable waypoints) and can **animate**: dash, dots,
+beam or pulse flows to show data moving through your system.
 
 ![Animated edges — beam flows on a system diagram](docs/media/animated.gif)
 
@@ -72,15 +77,25 @@ AI simply stays off until you add a key.
 
 - ⚡ **Zero friction** — open the site, you're drawing. `/` reopens the board
   you were working on; the board URL is the sharing capability.
-- 👥 **Live collaboration** — cursors, presence, per-page sync + anonymous
-  comment threads pinned to shapes.
-- ✦ **AI co-editor (BYOK)** — concurrent-edit safe: while the AI works you can
-  keep editing; its changes merge onto your latest board instead of replacing it.
-- 📤 **Export** — SVG, PNG, animated GIF, per-page deck PNGs, Mermaid, and a
-  re-importable board JSON. Imports draw.io files.
-- 🧩 **Agent-friendly** — a small [MCP server](mcp/) lets AI agents create and
-  edit boards through the REST API (the board URL is the capability — no
-  tokens needed).
+- 🎨 **Real diagramming** — 47 shapes + cloud stencils, rotation, grouping
+  (`⌘G`), align/distribute, z-order, text wrap/formatting, type-to-edit,
+  rubber-band select across shapes *and* connectors, grid & snap.
+- 👥 **Live collaboration** — shared cursors, presence, per-page sync,
+  anonymous comment threads pinned to shapes, live rename, and per-board
+  **version history** with restore.
+- ✦ **AI co-editor (BYOK)** — chat edits, text/Mermaid→diagram, whiteboard
+  photo→editable shapes (background jobs), right-click "enrich with AI".
+  Concurrent-edit safe: its changes merge onto your latest board instead of
+  replacing it.
+- 📤 **Export & import** — SVG, PNG, animated GIF, per-page deck PNGs,
+  Mermaid, and a re-importable board JSON; imports draw.io files and pasted
+  images.
+- 🖥 **Ways to show it** — Present mode (pages become slides), focus mode
+  (`\`, just the canvas), collapsible panels (`[` / `]`), read-only
+  `/embed/{id}` iframes, and a `?` keyboard-shortcuts cheat sheet.
+- 🧩 **Agent-friendly** — a small [MCP server](mcp/) (get/create/update board,
+  list/add comments) lets AI agents edit boards through the REST API — the
+  board URL is the capability, no tokens needed.
 
 ## Self-host in one command
 
