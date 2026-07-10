@@ -81,7 +81,6 @@ class RoomManager:
         room: Room,
         payload: dict,
         exclude: int | None = None,
-        _is_presence: bool = False,
     ) -> None:
         dead: list[int] = []
         for cid, ws in list(room.sockets.items()):
@@ -90,14 +89,16 @@ class RoomManager:
             if not await self.send(ws, payload):
                 dead.append(cid)
         # Reap sockets that died without a clean close (e.g. network drop) so a
-        # ghost peer stops showing in presence. Refresh presence once after a
-        # reap — guarded so the presence frame itself never re-triggers this.
+        # ghost peer stops showing in presence, then push a corrected presence
+        # frame. Recursion is bounded: each reap strictly shrinks the room, so
+        # a presence broadcast can re-enter here at most once per dead socket
+        # (the old guard suppressed the correction and left the ghost visible
+        # until some unrelated frame happened to flush it).
         if dead:
             for cid in dead:
                 room.sockets.pop(cid, None)
                 room.users.pop(cid, None)
-            if not _is_presence:
-                await self.presence(room)
+            await self.presence(room)
 
     async def presence(self, room: Room) -> None:
         # Only publish display fields — client_id is an internal dedup key and
@@ -107,7 +108,7 @@ class RoomManager:
              "kind": info.get("kind")}
             for cid, info in sorted(room.users.items())
         ]
-        await self.broadcast(room, {"t": "presence", "users": users}, _is_presence=True)
+        await self.broadcast(room, {"t": "presence", "users": users})
 
 
 manager = RoomManager()

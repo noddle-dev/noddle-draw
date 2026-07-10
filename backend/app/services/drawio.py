@@ -34,9 +34,13 @@ import re
 import urllib.parse
 import zlib
 import xml.etree.ElementTree as ET
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 _MAX_XML_BYTES = 5_000_000
 _MAX_CELLS = 3_000
+# Cap on decompressed <diagram> size — a small deflate payload can inflate to
+# gigabytes (decompression bomb); stop well before that.
+_MAX_INFLATED_BYTES = 8_000_000
 
 _DEFAULT_W, _DEFAULT_H = 120.0, 60.0
 _NODE_FILL = "#eef4ff"
@@ -136,9 +140,16 @@ def _decode_diagram_text(text: str) -> ET.Element:
     """The compressed <diagram> payload: base64 → raw-deflate → urldecode."""
     try:
         raw = base64.b64decode(text.strip(), validate=True)
-        inflated = zlib.decompress(raw, -15)
+        # Bounded inflate: stop at the cap so a decompression bomb can't
+        # exhaust memory. unconsumed_tail non-empty ⇒ payload exceeds the cap.
+        d = zlib.decompressobj(-15)
+        inflated = d.decompress(raw, _MAX_INFLATED_BYTES)
+        if d.unconsumed_tail:
+            raise InvalidDrawio("Diagram content is too large to import.")
         xml_text = urllib.parse.unquote(inflated.decode("utf-8"))
-        return ET.fromstring(xml_text)
+        return _safe_fromstring(xml_text)
+    except InvalidDrawio:
+        raise
     except Exception as e:  # noqa: BLE001 — any failure = not a drawio payload
         raise InvalidDrawio("Could not decompress the diagram content.") from e
 
@@ -216,9 +227,11 @@ def drawio_to_diagram(xml_text: str) -> dict:
     if len(xml_text.encode("utf-8", "ignore")) > _MAX_XML_BYTES:
         raise InvalidDrawio("File is too large (5MB limit).")
     try:
-        root = ET.fromstring(xml_text)
+        root = _safe_fromstring(xml_text)
     except ET.ParseError as e:
         raise InvalidDrawio("Invalid XML.") from e
+    except Exception as e:  # noqa: BLE001 — defused rejects DOCTYPE/entities
+        raise InvalidDrawio("XML contains disallowed constructs.") from e
 
     pages = []
     for pi, (page_name, model) in enumerate(_models(root)):

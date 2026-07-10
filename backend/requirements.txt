@@ -1,6 +1,9 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
+# Hardened XML parsing for untrusted uploads (SVG sanitizer + draw.io import):
+# rejects DOCTYPE/entity declarations, blocking billion-laughs expansion bombs.
+defusedxml==0.7.1
 # AI (image→SVG, text→diagram) calls Claude Opus 4.8 on Databricks Model Serving
 # using stdlib urllib (OAuth M2M token mint + /serving-endpoints/.../invocations),
 # so no extra SDK dependency is required. See app/services/ai.py.

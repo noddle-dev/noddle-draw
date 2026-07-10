@@ -39,3 +39,16 @@ def test_external_href_is_stripped_scripts_rejected():
 def test_garbage_still_rejected():
     with pytest.raises(ValueError):
         sanitize_svg("this is not svg")
+
+
+def test_entity_expansion_bomb_is_rejected():
+    # A "billion laughs" DOCTYPE must be refused at parse time (defusedxml),
+    # never expanded — otherwise an upload can exhaust memory.
+    bomb = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE svg [<!ENTITY a "AAAAAAAAAA">'
+        '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+        '<svg xmlns="http://www.w3.org/2000/svg"><text>&b;</text></svg>'
+    )
+    with pytest.raises(ValueError):
+        sanitize_svg(bomb)

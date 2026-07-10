@@ -11,6 +11,11 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+# Parse with defusedxml — it rejects DOCTYPE/entity declarations, so a
+# "billion laughs" entity-expansion bomb in an uploaded SVG can't blow up
+# memory at parse time. Element construction/serialization stays stdlib ET.
+from defusedxml.ElementTree import fromstring as _safe_fromstring
+from defusedxml.common import DefusedXmlException
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -147,7 +152,9 @@ def sanitize_svg(raw: str) -> str:
     if "xlink:" in raw and "xmlns:xlink" not in raw:
         raw = raw.replace("<svg", f'<svg xmlns:xlink="{XLINK_NS}"', 1)
     try:
-        root = ET.fromstring(raw)
+        root = _safe_fromstring(raw)
+    except DefusedXmlException as e:
+        raise ValueError("SVG contains disallowed XML (entities/DOCTYPE).") from e
     except ET.ParseError as e:
         raise ValueError(f"Not a valid SVG file: {e}") from e
 

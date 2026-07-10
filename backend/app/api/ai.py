@@ -164,7 +164,10 @@ async def image_to_svg(
     if len(raw) > _MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image is too large (max 8MB).")
 
-    backend = _resolve_backend(request)  # may 503 (no backend) / 400 (bad headers)
+    # Threadpool: the free-pool path may verify Cloudflare Turnstile with a
+    # blocking HTTP call — running it inline would freeze the event loop (and
+    # the collab websockets) for up to 10s.
+    backend = await run_in_threadpool(_resolve_backend, request)  # may 503 / 400
 
     def _convert() -> str:
         return service.image_to_svg(
@@ -212,7 +215,7 @@ async def submit_image_job(
         raise HTTPException(status_code=400, detail="Image file is empty.")
     if len(raw) > _MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image is too large (max 8MB).")
-    backend = _resolve_backend(request)  # may 503 / 400
+    backend = await run_in_threadpool(_resolve_backend, request)  # may 503 / 400 (Turnstile off-loop)
     job = request.app.state.ai_jobs.submit(
         user_id=cid,
         name=file.filename or "sketch",
@@ -296,7 +299,7 @@ async def edit_diagram(
         model = None
     if not isinstance(model, str):
         model = None
-    backend = _resolve_backend(request)
+    backend = await run_in_threadpool(_resolve_backend, request)  # Turnstile off-loop
     try:
         return await run_in_threadpool(
             service.edit_diagram,

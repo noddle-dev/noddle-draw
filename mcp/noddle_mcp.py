@@ -18,12 +18,24 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 
 BASE = os.environ.get("NODDLE_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 AGENT_NAME = os.environ.get("NODDLE_AGENT_NAME", "MCP agent")[:40]
+
+# Board ids are uuid4().hex[:12] — mirror the server's validator so an
+# agent-supplied id can't smuggle path traversal / query chars into a URL.
+_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _doc_id(args: dict) -> str:
+    did = str(args.get("doc_id", ""))
+    if not _ID_RE.match(did):
+        raise ValueError(f"Invalid board id: {did!r} (expected 12 hex chars).")
+    return did
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -129,13 +141,14 @@ TOOLS: list[dict] = [
 
 def call_tool(name: str, args: dict) -> str:
     if name == "get_board":
-        doc = api("GET", f"/api/documents/{args['doc_id']}")
+        did = _doc_id(args)
+        doc = api("GET", f"/api/documents/{did}")
         assert isinstance(doc, dict)
         return json.dumps(
             {
-                "id": args["doc_id"],
+                "id": did,
                 "name": (doc.get("meta") or {}).get("name"),
-                "url": f"{BASE}/d/{args['doc_id']}",
+                "url": f"{BASE}/d/{did}",
                 "my_role": doc.get("my_role"),
                 "diagram": doc.get("diagram"),
             },
@@ -154,24 +167,27 @@ def call_tool(name: str, args: dict) -> str:
         )
 
     if name == "update_board":
-        doc = api("GET", f"/api/documents/{args['doc_id']}")
+        did = _doc_id(args)
+        doc = api("GET", f"/api/documents/{did}")
         assert isinstance(doc, dict)
         api(
             "PUT",
-            f"/api/documents/{args['doc_id']}",
+            f"/api/documents/{did}",
             {
                 "svg": doc.get("svg") or "",
                 "diagram": args["diagram"],
                 "author_name": AGENT_NAME,
             },
         )
-        return json.dumps({"ok": True, "url": f"{BASE}/d/{args['doc_id']}"})
+        return json.dumps({"ok": True, "url": f"{BASE}/d/{did}"})
 
     if name == "list_comments":
-        out = api("GET", f"/api/documents/{args['doc_id']}/comments")
+        did = _doc_id(args)
+        out = api("GET", f"/api/documents/{did}/comments")
         return json.dumps(out, ensure_ascii=False)
 
     if name == "add_comment":
+        did = _doc_id(args)
         body: dict = {"body": args["body"], "guest_name": AGENT_NAME}
         if args.get("parent_id"):
             body["parent_id"] = args["parent_id"]
@@ -181,7 +197,7 @@ def call_tool(name: str, args: dict) -> str:
             body["anchor"] = {"kind": "edge", "ref": args["edge_id"]}
         else:
             body["anchor"] = {"kind": "point", "x": 100.0, "y": 100.0}
-        out = api("POST", f"/api/documents/{args['doc_id']}/comments", body)
+        out = api("POST", f"/api/documents/{did}/comments", body)
         return json.dumps(out, ensure_ascii=False)
 
     raise RuntimeError(f"Unknown tool: {name}")

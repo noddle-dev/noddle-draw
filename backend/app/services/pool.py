@@ -83,6 +83,9 @@ class FreePool:
             self._day_stamp = today
             self._day.clear()
             self._spent = 0
+            # Also drop the per-minute deques so the map doesn't grow one entry
+            # per IP ever seen (they'd otherwise only empty, never disappear).
+            self._minute.clear()
 
     def check(self, ip: str, turnstile_token: str | None) -> None:
         """Admit or reject one pool request. Raises :class:`PoolLimited`."""

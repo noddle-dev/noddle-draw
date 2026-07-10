@@ -28,6 +28,18 @@ from app.api.schemas import (
 from app.domain.models import DocumentMeta
 from app.services.auth import GUEST, can
 from app.services.diagram_render import diagram_to_svg
+
+# Reject oversized uploads before decode/parse — the AI routes already cap at
+# 8MB; do the same for file uploads/imports so a huge body can't tie up a
+# worker (and, for .drawio, feed the decompressor).
+_MAX_UPLOAD_BYTES = 8_000_000
+
+
+async def _read_capped(file: UploadFile) -> str:
+    raw = await file.read()
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File is too large (8MB limit).")
+    return raw.decode("utf-8", errors="replace")
 from app.services.documents import (
     DocumentNotFound,
     DocumentService,
@@ -66,7 +78,7 @@ async def upload_document(
     service: DocumentService = Depends(get_service),
     audit=Depends(get_audit),
 ) -> DocMeta:
-    raw = (await file.read()).decode("utf-8", errors="replace")
+    raw = await _read_capped(file)
     try:
         meta = service.create(raw, file.filename)
     except InvalidSvg as e:
@@ -118,7 +130,7 @@ async def import_document(
     handled client-side through the existing text→diagram AI path; ``.vsdx``
     is a spike (docs/spikes). A preview SVG is baked so exports aren't blank
     before the first open+save."""
-    raw = (await file.read()).decode("utf-8", errors="replace")
+    raw = await _read_capped(file)
     name = (file.filename or "Imported board").rsplit(".", 1)[0][:120]
     if "<mxfile" not in raw and "<mxGraphModel" not in raw:
         raise HTTPException(
