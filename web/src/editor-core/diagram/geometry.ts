@@ -6,7 +6,7 @@
  * through the orthogonal sparse-grid A* (see ./orthogonal) with side-aware
  * exits, and honour user waypoints when a segment has been dragged. PURE TS.
  */
-import { perimeterPoint } from "./perimeter";
+import { perimeterPoint, rotatePoint } from "./perimeter";
 import {
   applyWaypoints,
   autoSide,
@@ -26,17 +26,6 @@ export type NodeMap = Record<string, DiagramNode>;
 
 export function nodeCenter(node: DiagramNode): Vec {
   return { x: node.x + node.w / 2, y: node.y + node.h / 2 };
-}
-
-/** Rotate `p` by `deg` (clockwise, SVG convention) around `c`. */
-export function rotatePoint(p: Vec, c: Vec, deg: number): Vec {
-  if (!deg) return p;
-  const r = (deg * Math.PI) / 180;
-  const cos = Math.cos(r);
-  const sin = Math.sin(r);
-  const dx = p.x - c.x;
-  const dy = p.y - c.y;
-  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
 }
 
 /**
@@ -65,7 +54,10 @@ export function nodeAtPoint(
 ): string | null {
   for (const n of Object.values(nodes)) {
     if (n.id === excludeId) continue;
-    if (p.x >= n.x && p.x <= n.x + n.w && p.y >= n.y && p.y <= n.y + n.h) {
+    // Test in the node's own frame so a rotated shape is hit under its
+    // visible body, not its axis-aligned bbox.
+    const q = n.rotation ? rotatePoint(p, nodeCenter(n), -n.rotation) : p;
+    if (q.x >= n.x && q.x <= n.x + n.w && q.y >= n.y && q.y <= n.y + n.h) {
       return n.id;
     }
   }
@@ -77,6 +69,16 @@ export function nodeAtPoint(
 export function portPoint(node: DiagramNode, rel: Vec): Vec {
   const p = { x: node.x + rel.x * node.w, y: node.y + rel.y * node.h };
   return node.rotation ? rotatePoint(p, nodeCenter(node), node.rotation) : p;
+}
+
+/** Inverse of portPoint: a WORLD point → its rel (0..1 of the node box),
+ * inverse-rotating first so a drop on a rotated shape maps to the right rel. */
+export function worldPointToRel(node: DiagramNode, p: Vec): Vec {
+  const q = node.rotation ? rotatePoint(p, nodeCenter(node), -node.rotation) : p;
+  return {
+    x: node.w ? (q.x - node.x) / node.w : 0.5,
+    y: node.h ? (q.y - node.y) / node.h : 0.5,
+  };
 }
 
 /**

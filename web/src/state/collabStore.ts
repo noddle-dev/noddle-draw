@@ -16,7 +16,19 @@
 import { create } from "zustand";
 import { useDiagramStore } from "./diagramStore";
 import { pauseHistory } from "./diagramHistory";
-import { clientId } from "../shared/api/client";
+
+/** Per-TAB connection id. Dedups presence across RECONNECTS of this page
+ * (network blip, rename → disconnect+connect) while letting two tabs of the
+ * same browser coexist as two peers — a browser-wide id (localStorage) made
+ * tabs evict each other in a 2s kick loop. Module-scoped on purpose: a clean
+ * reload closes the socket (no ghost) and mints a fresh id. */
+const tabId = (() => {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `t-${Math.random().toString(36).slice(2, 12)}`;
+  }
+})();
 
 export interface Peer {
   id: number;
@@ -238,10 +250,10 @@ export function connectCollab(docId: string): void {
   ws = socket;
 
   socket.onopen = () => {
-    // clientId is this browser's stable id: the server evicts any prior
-    // connection carrying it, so a reconnect (network blip, rename) never
-    // leaves a duplicate "ghost" of you in the presence list.
-    sendJson({ t: "hello", ...getIdentity(), clientId: clientId() });
+    // The server evicts any prior connection carrying this tab's id, so a
+    // reconnect (network blip, rename) never leaves a duplicate "ghost" of
+    // you in the presence list.
+    sendJson({ t: "hello", ...getIdentity(), clientId: tabId });
     useCollabStore.setState({ connected: true });
   };
 
@@ -311,8 +323,11 @@ export function connectCollab(docId: string): void {
     }
   };
 
-  socket.onclose = () => {
+  socket.onclose = (ev) => {
     useCollabStore.setState({ connected: false, peers: [], cursors: {} });
+    // 4001 = superseded by a newer connection with our own id — reconnecting
+    // would just evict that one back (kick loop). Let the newer one live.
+    if (ev.code === 4001) return;
     // Auto-reconnect while this doc is still open (e.g. dev server restart).
     if (currentDocId === docId && !reconnectTimer) {
       reconnectTimer = setTimeout(() => {

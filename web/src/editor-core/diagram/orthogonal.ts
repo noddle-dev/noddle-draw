@@ -410,7 +410,7 @@ export function applyWaypoints(startPt: Vec, waypoints: Vec[], endPt: Vec): Vec[
 // auto-connect magnet
 // ---------------------------------------------------------------------------
 
-import { perimeterPoint } from "./perimeter";
+import { perimeterPoint, rotatePoint } from "./perimeter";
 
 export interface SnapHit {
   nodeId: string;
@@ -449,30 +449,38 @@ export function snapConnect(
   for (const n of Object.values(nodes)) {
     if (n.id === excludeId) continue;
 
+    // Work in the node's own (unrotated) frame: inverse-rotate the cursor,
+    // test/project against the axis-aligned body, then rotate the resulting
+    // attach point back out so it lands on the shape the user sees. The stored
+    // portRel is frame-independent — resolveEndpoint/portPoint re-rotate it.
+    const c = { x: n.x + n.w / 2, y: n.y + n.h / 2 };
+    const pl = n.rotation ? rotatePoint(p, c, -n.rotation) : p;
+    const out = (q: Vec): Vec => (n.rotation ? rotatePoint(q, c, n.rotation) : q);
+
     // port magnets first — they win over the body
     let portHit: SnapHit | null = null;
     let portDist = Infinity;
     for (const rel of PORT_RELS) {
       const pp = { x: n.x + rel.x * n.w, y: n.y + rel.y * n.h };
-      const d = Math.hypot(pp.x - p.x, pp.y - p.y);
+      const d = Math.hypot(pp.x - pl.x, pp.y - pl.y);
       if (d <= portR && d < portDist) {
         portDist = d;
-        portHit = { nodeId: n.id, portRel: rel, point: pp };
+        portHit = { nodeId: n.id, portRel: rel, point: out(pp) };
       }
     }
 
-    const inside = p.x >= n.x && p.x <= n.x + n.w && p.y >= n.y && p.y <= n.y + n.h;
-    const dx = Math.max(n.x - p.x, 0, p.x - (n.x + n.w));
-    const dy = Math.max(n.y - p.y, 0, p.y - (n.y + n.h));
+    const inside = pl.x >= n.x && pl.x <= n.x + n.w && pl.y >= n.y && pl.y <= n.y + n.h;
+    const dx = Math.max(n.x - pl.x, 0, pl.x - (n.x + n.w));
+    const dy = Math.max(n.y - pl.y, 0, pl.y - (n.y + n.h));
     const boxDist = Math.hypot(dx, dy);
 
     let cand: { hit: SnapHit; dist: number; inside: boolean } | null = null;
     if (portHit) {
       cand = { hit: portHit, dist: portDist - 1000, inside }; // ports dominate
     } else if (inside) {
-      cand = { hit: { nodeId: n.id, point: perimeterPoint(n, p) }, dist: -500 + boxDist, inside };
+      cand = { hit: { nodeId: n.id, point: out(perimeterPoint(n, pl)) }, dist: -500 + boxDist, inside };
     } else if (boxDist <= snapR) {
-      cand = { hit: { nodeId: n.id, point: perimeterPoint(n, p) }, dist: boxDist, inside };
+      cand = { hit: { nodeId: n.id, point: out(perimeterPoint(n, pl)) }, dist: boxDist, inside };
     }
     if (cand && (!best || cand.dist < best.dist)) best = cand;
   }

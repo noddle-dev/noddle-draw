@@ -12,7 +12,7 @@
 import { useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { screenToContent } from "../../editor-core";
-import { perimeterPoint, snapConnect, rotatePoint } from "../../editor-core/diagram";
+import { perimeterPoint, snapConnect, rotatePoint, worldPointToRel } from "../../editor-core/diagram";
 import type { DiagramEdge, DiagramNode, Vec } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
@@ -101,7 +101,7 @@ export function ConnectionPorts({
         if (hit.portRel) return { nodeId: hit.nodeId, rel: hit.portRel };
         const t = useDiagramStore.getState().nodes[hit.nodeId];
         if (!t || !t.w || !t.h) return null;
-        return { nodeId: hit.nodeId, rel: { x: (hit.point.x - t.x) / t.w, y: (hit.point.y - t.y) / t.h } };
+        return { nodeId: hit.nodeId, rel: worldPointToRel(t, hit.point) };
       };
 
       const move = (ev: PointerEvent) => {

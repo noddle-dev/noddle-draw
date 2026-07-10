@@ -169,7 +169,13 @@ export function AiKeySettings({
             className="text-input"
             style={{ flex: 1 }}
             value={provider}
-            onChange={(e) => setProvider(e.target.value as AiProvider)}
+            onChange={(e) => {
+              // Switching provider clears a preset-filled model/base — sending
+              // e.g. "openai/gpt-oss-120b" to OpenAI would just error.
+              setProvider(e.target.value as AiProvider);
+              setModel("");
+              setBase("");
+            }}
           >
             {PROVIDERS.map((p) => (
               <option key={p.value} value={p.value}>{p.label}</option>

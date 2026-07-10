@@ -16,6 +16,7 @@ import { screenToContent } from "../../editor-core";
 import {
   edgePath,
   snapConnect,
+  worldPointToRel,
   type Attachment,
   type DiagramEdge,
   type NodeMap,
@@ -72,7 +73,7 @@ export function EdgeEndpointHandles({
         } else {
           const t = nodes[hit.nodeId];
           att = t && t.w && t.h
-            ? { kind: "port", nodeId: hit.nodeId, rel: { x: (hit.point.x - t.x) / t.w, y: (hit.point.y - t.y) / t.h } }
+            ? { kind: "port", nodeId: hit.nodeId, rel: worldPointToRel(t, hit.point) }
             : { kind: "floating", nodeId: hit.nodeId };
         }
         useDiagramStore.getState().updateEdge(edge.id, {

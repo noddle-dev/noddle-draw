@@ -31,6 +31,7 @@ import {
 } from "../editor-core";
 import { FLOW_INTENSITY, type FlowIntensity } from "../editor-core/diagram";
 import { api, ApiError, type DocMeta } from "../shared/api/client";
+import { scrubSvgString } from "../shared/svgScrub";
 import {
   clearLastBoardId,
   forgetBoard,
@@ -505,10 +506,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       await get().openDoc(meta.id);
       set({ status: `Uploaded "${meta.name}".`, statusKind: "ok" });
     } catch (err) {
-      // offline fallback: load locally without backend (mirrors editor.js)
+      // offline fallback: load locally without backend (mirrors editor.js).
+      // The server sanitizer is unreachable here, so scrub client-side before
+      // touching the DOM — a raw local .svg must never run script in our origin.
       try {
         const text = await file.text();
-        get().loadSvgString(text);
+        const safe = /\.svg$/i.test(file.name) ? scrubSvgString(text) : text;
+        if (!safe) throw new Error("File couldn't be safely parsed.");
+        get().loadSvgString(safe);
         set({
           status: "Backend didn't respond — opened the file locally (not saved).",
           statusKind: "",

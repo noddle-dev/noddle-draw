@@ -14,6 +14,18 @@ function center(node: DiagramNode): Vec {
   return { x: node.x + node.w / 2, y: node.y + node.h / 2 };
 }
 
+/** Rotate `p` by `deg` (clockwise, SVG convention) around `c`. Lives here so
+ * both geometry.ts and orthogonal.ts can share it without an import cycle. */
+export function rotatePoint(p: Vec, c: Vec, deg: number): Vec {
+  if (!deg) return p;
+  const r = (deg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
+}
+
 /**
  * Ray-from-center intersection with an arbitrary polygon outline (normalized
  * 0..1 points from shapeDefs, scaled to the node box). Generalizes diamond to

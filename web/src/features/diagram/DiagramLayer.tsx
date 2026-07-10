@@ -16,7 +16,15 @@ import { EdgeEndpointHandles } from "./EdgeEndpointHandles";
 import { SegmentHandles } from "./SegmentHandles";
 import { NodeView, RotateHandle } from "./NodeView";
 import type { PreviewEdge } from "./ConnectionPorts";
+import { portPoint } from "../../editor-core/diagram";
 import type { ArrowHead, DiagramEdge, DiagramNode } from "../../editor-core/diagram";
+
+/** rotate() transform so connect-preview chrome hugs a rotated target. */
+function nodeRotate(n: DiagramNode): string | undefined {
+  return n.rotation
+    ? `rotate(${n.rotation} ${n.x + n.w / 2} ${n.y + n.h / 2})`
+    : undefined;
+}
 
 const ACCENT = "#2563eb";
 
@@ -173,6 +181,7 @@ export function DiagramLayer() {
           y={nodes[preview.hoverTargetId].y - 2}
           width={nodes[preview.hoverTargetId].w + 4}
           height={nodes[preview.hoverTargetId].h + 4}
+          transform={nodeRotate(nodes[preview.hoverTargetId])}
           fill="none"
           stroke={ACCENT}
           strokeWidth={2.5}
@@ -185,14 +194,8 @@ export function DiagramLayer() {
       {preview?.snapPort && nodes[preview.snapPort.nodeId] && (
         <circle
           data-editor-only="1"
-          cx={
-            nodes[preview.snapPort.nodeId].x +
-            preview.snapPort.rel.x * nodes[preview.snapPort.nodeId].w
-          }
-          cy={
-            nodes[preview.snapPort.nodeId].y +
-            preview.snapPort.rel.y * nodes[preview.snapPort.nodeId].h
-          }
+          cx={portPoint(nodes[preview.snapPort.nodeId], preview.snapPort.rel).x}
+          cy={portPoint(nodes[preview.snapPort.nodeId], preview.snapPort.rel).y}
           r={8}
           fill="#fff"
           stroke={ACCENT}
@@ -210,6 +213,7 @@ export function DiagramLayer() {
           y={endpointHoverNode.y - 2}
           width={endpointHoverNode.w + 4}
           height={endpointHoverNode.h + 4}
+          transform={nodeRotate(endpointHoverNode)}
           fill="none"
           stroke={ACCENT}
           strokeWidth={2.5}
