@@ -730,14 +730,17 @@ class AIService:
         Gemini's OpenAI shim, and — content-wise — the Databricks call).
         ``extra_body`` merges provider-specific fields (e.g. OpenRouter's
         ``models`` fallback array) into the payload."""
-        body = json.dumps(
-            {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                **(extra_body or {}),
-            }
-        ).encode()
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            **(extra_body or {}),
+        }
+        # OpenRouter ignores the `models` fallback array when a `model` field
+        # is also present — the chain must travel alone.
+        if "models" in payload:
+            payload.pop("model", None)
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(
             url, data=body, method="POST",
             headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT, **headers},
