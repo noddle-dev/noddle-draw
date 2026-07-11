@@ -15,6 +15,40 @@ function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+/** Allowed PNG export scale factors — device-independent multipliers of the
+ * artboard size (1× = artboard pixels). Higher = larger, sharper PNGs for
+ * docs/slides. The source is vector SVG, so a bigger canvas re-rasterizes it
+ * crisply rather than upscaling. */
+export const PNG_SCALES = [1, 2, 4] as const;
+export type PngScale = (typeof PNG_SCALES)[number];
+
+const EXPORT_SCALE_KEY = "noddle.exportScale";
+
+/** Coerce an arbitrary value to a valid PNG scale, defaulting to 1×. Also
+ * guards callers that bind `onClick={exportPng}` (which would pass an event). */
+function normalizePngScale(scale?: number): PngScale {
+  return (PNG_SCALES as readonly number[]).includes(scale as number)
+    ? (scale as PngScale)
+    : 1;
+}
+
+/** Remembered export scale (persists across reloads; storage may be blocked). */
+export function loadPngScale(): PngScale {
+  try {
+    return normalizePngScale(Number(localStorage.getItem(EXPORT_SCALE_KEY)));
+  } catch {
+    return 1;
+  }
+}
+
+export function savePngScale(scale: number): void {
+  try {
+    localStorage.setItem(EXPORT_SCALE_KEY, String(normalizePngScale(scale)));
+  } catch {
+    /* storage blocked */
+  }
+}
+
 export function useExport() {
   const exportSvg = useCallback(() => {
     const st = useEditorStore.getState();
@@ -26,21 +60,21 @@ export function useExport() {
     );
   }, []);
 
-  const exportPng = useCallback(() => {
+  const exportPng = useCallback((scale?: number) => {
+    const s = normalizePngScale(scale);
     const st = useEditorStore.getState();
     const svg = st.currentBoardSvg();
     if (!svg) return;
     const { w, h } = st.artboard;
-    const dpr = window.devicePixelRatio || 1;
     const img = new Image();
     const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
     img.onload = () => {
       const c = document.createElement("canvas");
-      c.width = w * dpr;
-      c.height = h * dpr;
+      c.width = Math.round(w * s);
+      c.height = Math.round(h * s);
       const ctx = c.getContext("2d");
       if (!ctx) return;
-      ctx.scale(dpr, dpr);
+      ctx.scale(s, s);
       ctx.drawImage(img, 0, 0, w, h);
       URL.revokeObjectURL(url);
       c.toBlob(
@@ -55,11 +89,12 @@ export function useExport() {
 
   /** Deck export (#17): every page as a numbered PNG. Pages render through
    * the live canvas, so we switch → wait two frames → rasterize → restore. */
-  const exportDeckPng = useCallback(async () => {
+  const exportDeckPng = useCallback(async (scale?: number) => {
+    const s = normalizePngScale(scale);
     // Hidden pages are excluded from the deck export.
     const pages = usePagesStore.getState().pages.filter((p) => !p.hidden);
     if (pages.length <= 1) {
-      exportPng();
+      exportPng(s);
       return;
     }
     const original = usePagesStore.getState().activeId;
@@ -69,17 +104,16 @@ export function useExport() {
       );
     const rasterize = (svg: string, w: number, h: number) =>
       new Promise<Blob | null>((resolve) => {
-        const dpr = window.devicePixelRatio || 1;
         const img = new Image();
         const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
         img.onload = () => {
           const c = document.createElement("canvas");
-          c.width = w * dpr;
-          c.height = h * dpr;
+          c.width = Math.round(w * s);
+          c.height = Math.round(h * s);
           const ctx = c.getContext("2d");
           URL.revokeObjectURL(url);
           if (!ctx) return resolve(null);
-          ctx.scale(dpr, dpr);
+          ctx.scale(s, s);
           ctx.drawImage(img, 0, 0, w, h);
           c.toBlob(resolve, "image/png");
         };
