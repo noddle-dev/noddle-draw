@@ -12,6 +12,7 @@ main:app``) work.
 """
 from __future__ import annotations
 
+import html
 import logging
 
 from fastapi import FastAPI
@@ -184,19 +185,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # SPA shell (client-side routing opens the document).
         index_html = frontend / "index.html"
 
-        @app.get("/d/{doc_id}", response_class=FileResponse)
-        def _spa_document(doc_id: str) -> FileResponse:  # noqa: ARG001
-            return FileResponse(index_html)
+        # The SPA shell is read ONCE at boot; when PLAUSIBLE_DOMAIN is set the
+        # (cookieless, privacy-friendly) Plausible snippet is injected before
+        # </head> — operator opt-in, absent by default like every integration.
+        # NOTE: this loads an external script, which works because the only CSP
+        # we set is `frame-ancestors` (see _frame_headers). If a `script-src`/
+        # `connect-src` policy is ever added, allowlist the Plausible host there
+        # or analytics will silently fail to load/report.
+        # Values are operator-supplied env, but escaped anyway so an odd domain
+        # can't break out of the HTML attribute.
+        shell_html = index_html.read_text(encoding="utf-8")
+        if settings.plausible_domain:
+            snippet = (
+                f'<script defer data-domain="{html.escape(settings.plausible_domain)}" '
+                f'src="{html.escape(settings.plausible_src)}"></script>'
+            )
+            shell_html = shell_html.replace("</head>", snippet + "</head>", 1)
 
-        @app.get("/embed/{doc_id}", response_class=FileResponse)
-        def _spa_embed(doc_id: str) -> FileResponse:  # noqa: ARG001
+        def _shell() -> HTMLResponse:
+            return HTMLResponse(shell_html)
+
+        @app.get("/", response_class=HTMLResponse)
+        def _spa_root() -> HTMLResponse:
+            # explicit route so the shell (with analytics) wins over the
+            # StaticFiles html=True default below
+            return _shell()
+
+        @app.get("/d/{doc_id}", response_class=HTMLResponse)
+        def _spa_document(doc_id: str) -> HTMLResponse:  # noqa: ARG001
+            return _shell()
+
+        @app.get("/embed/{doc_id}", response_class=HTMLResponse)
+        def _spa_embed(doc_id: str) -> HTMLResponse:  # noqa: ARG001
             """Read-only iframe view — the SPA hides all chrome for /embed/*.
             This route is exempt from the frame-ancestors lockdown above."""
-            return FileResponse(index_html)
+            return _shell()
 
-        @app.get("/generate", response_class=FileResponse)
-        def _spa_generate() -> FileResponse:
-            return FileResponse(index_html)
+        @app.get("/generate", response_class=HTMLResponse)
+        def _spa_generate() -> HTMLResponse:
+            return _shell()
 
         app.mount(
             "/",
