@@ -12,6 +12,7 @@ main:app``) work.
 """
 from __future__ import annotations
 
+import html
 import logging
 
 from fastapi import FastAPI
@@ -187,11 +188,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The SPA shell is read ONCE at boot; when PLAUSIBLE_DOMAIN is set the
         # (cookieless, privacy-friendly) Plausible snippet is injected before
         # </head> — operator opt-in, absent by default like every integration.
+        # NOTE: this loads an external script, which works because the only CSP
+        # we set is `frame-ancestors` (see _frame_headers). If a `script-src`/
+        # `connect-src` policy is ever added, allowlist the Plausible host there
+        # or analytics will silently fail to load/report.
+        # Values are operator-supplied env, but escaped anyway so an odd domain
+        # can't break out of the HTML attribute.
         shell_html = index_html.read_text(encoding="utf-8")
         if settings.plausible_domain:
             snippet = (
-                f'<script defer data-domain="{settings.plausible_domain}" '
-                f'src="{settings.plausible_src}"></script>'
+                f'<script defer data-domain="{html.escape(settings.plausible_domain)}" '
+                f'src="{html.escape(settings.plausible_src)}"></script>'
             )
             shell_html = shell_html.replace("</head>", snippet + "</head>", 1)
 
