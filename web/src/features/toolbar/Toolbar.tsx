@@ -115,7 +115,7 @@ export function Toolbar() {
             onChange={onFileChange}
           />
         </label>
-        <Button disabled={!hasContent} onClick={exportSvg}>
+        <Button disabled={!hasContent} onClick={() => exportSvg()}>
           ⇩ SVG
         </Button>
         <Button disabled={!hasContent} onClick={() => exportPng()}>
