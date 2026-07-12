@@ -104,7 +104,17 @@ docker compose up --build
 # → http://localhost:8000  — start drawing, no sign-up
 ```
 
-One container (FastAPI + prebuilt React SPA) plus Postgres. Without Docker:
+One container (FastAPI + prebuilt React SPA) plus Postgres.
+
+Prefer a prebuilt image (no clone, no build)? Once the release image is
+published to GHCR you can run it directly — single container, file storage,
+no Postgres:
+
+```bash
+docker run -p 8000:8000 -v noddle_draw:/app/backend/storage ghcr.io/noddle-dev/noddle-draw:latest
+```
+
+Without Docker:
 
 ```bash
 # backend
