@@ -347,8 +347,10 @@ function LabelChip({
       onPointerDown={onPointerDown}
       onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}
     >
-      <rect x={cx - chipW / 2} y={cy - chipH / 2} width={chipW} height={chipH} rx={6} ry={6}
-        fill="#ffffff" stroke="var(--border, #e6e8ec)" strokeWidth={1} />
+      {/* Excalidraw-style: a borderless canvas-colored halo that masks the
+          line under the text — no chip outline. */}
+      <rect x={cx - chipW / 2} y={cy - chipH / 2} width={chipW} height={chipH} rx={4} ry={4}
+        fill="#ffffff" />
       <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fontSize={fs}
         fill="#1a1d23" style={{ userSelect: "none" }}>
         {text}
