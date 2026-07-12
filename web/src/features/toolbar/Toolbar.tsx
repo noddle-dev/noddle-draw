@@ -118,7 +118,7 @@ export function Toolbar() {
         <Button disabled={!hasContent} onClick={exportSvg}>
           ⇩ SVG
         </Button>
-        <Button disabled={!hasContent} onClick={exportPng}>
+        <Button disabled={!hasContent} onClick={() => exportPng()}>
           ⇩ PNG
         </Button>
         <Button variant="primary" disabled={!docId} onClick={() => void save()}>

@@ -23,7 +23,7 @@ import { useDiagramHistory } from "../../state/diagramHistory";
 import { useCommentsStore } from "../../state/commentsStore";
 import { Icon, BrandLogo } from "../../shared/ui";
 import { api } from "../../shared/api/client";
-import { useExport } from "../toolbar/useExport";
+import { useExport, PNG_SCALES, loadPngScale, savePngScale } from "../toolbar/useExport";
 import { GifExportModal } from "./GifExportModal";
 import { HistoryPanel } from "./HistoryPanel";
 import { TemplatesModal } from "../templates/TemplatesModal";
@@ -281,6 +281,13 @@ export function EditorTopbar() {
   const { exportSvg, exportPng, exportDeckPng } = useExport();
   const [exportOpen, setExportOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  // Chosen PNG output scale (1×/2×/4×), shared by "Export PNG" and "Deck PNG"
+  // and remembered across reloads.
+  const [pngScale, setPngScale] = useState<number>(loadPngScale);
+  const pickScale = (v: number) => {
+    setPngScale(v);
+    savePngScale(v);
+  };
 
   // 💬 comment tool — armed → the next canvas click drops a pin.
   const commentMode = useCommentsStore((s) => s.commentMode);
@@ -482,18 +489,32 @@ export function EditorTopbar() {
         {exportOpen && (
           <div>
             <div className="menu-backdrop" onClick={() => setExportOpen(false)} />
-            <div className="menu-pop" style={{ width: 160, top: 42 }}>
+            <div className="menu-pop" style={{ width: 176, top: 42 }}>
               <div className="menu-body">
+                {/* PNG output scale — applies to "Export PNG" and "Deck PNG".
+                    Buttons only set the scale; they don't close the menu. */}
+                <div className="props-label" style={{ margin: 0, padding: "6px 10px 4px" }}>PNG scale</div>
+                <div className="seg" style={{ margin: "0 8px 8px" }}>
+                  {PNG_SCALES.map((v) => (
+                    <button
+                      key={v}
+                      className={pngScale === v ? "active" : ""}
+                      onClick={() => pickScale(v)}
+                    >
+                      {v}×
+                    </button>
+                  ))}
+                </div>
                 <div className="menu-row" onClick={() => { setExportOpen(false); exportSvg(); }}>
                   <span className="ico">⬡</span><span style={{ flex: 1 }}>Export SVG</span>
                 </div>
-                <div className="menu-row" onClick={() => { setExportOpen(false); exportPng(); }}>
+                <div className="menu-row" onClick={() => { setExportOpen(false); exportPng(pngScale); }}>
                   <span className="ico">▧</span><span style={{ flex: 1 }}>Export PNG</span>
                 </div>
                 <div className="menu-row" onClick={() => { setExportOpen(false); setGifOpen(true); }}>
                   <span className="ico">⬒</span><span style={{ flex: 1 }}>Animated GIF…</span>
                 </div>
-                <div className="menu-row" onClick={() => { setExportOpen(false); void exportDeckPng(); }}>
+                <div className="menu-row" onClick={() => { setExportOpen(false); void exportDeckPng(pngScale); }}>
                   <span className="ico">▤</span><span style={{ flex: 1 }}>Deck PNG (per page)</span>
                 </div>
                 <div className="menu-row" onClick={() => { setExportOpen(false); exportBoardJson(title); }}>
