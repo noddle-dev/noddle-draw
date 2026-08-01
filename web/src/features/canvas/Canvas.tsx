@@ -507,6 +507,11 @@ export function Canvas() {
   const showEmptyHint =
     selection.length === 0 && contentRev === 0 && diagramNodeCount === 0;
 
+  // Before any board content exists the artboard still has its 100×100
+  // default — rendering it would paint a stray white square in the top-left
+  // corner on every reload, so keep the paper hidden until something loads.
+  const boardEmpty = contentRev === 0 && diagramNodeCount === 0;
+
   return (
     <section className={`canvas-host${gridOn ? "" : " no-grid"}`} ref={hostRef}>
       <svg id="stage" ref={stageRef} xmlns="http://www.w3.org/2000/svg">
@@ -519,6 +524,7 @@ export function Canvas() {
             width={artboard.w}
             height={artboard.h}
             className="artboard"
+            style={{ visibility: boardEmpty ? "hidden" : undefined }}
           />
           <g id="content" ref={contentRef} />
           <DiagramLayer />
