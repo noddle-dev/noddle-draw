@@ -95,6 +95,8 @@ export function perimeterPoint(node: DiagramNode, toward: Vec): Vec {
   switch (node.kind) {
     case "ellipse":
     case "terminator": // stadium ≈ ellipse for edge clipping
+    case "summingJunction": // both junctions are circles inscribed in the box
+    case "orJunction":
       return ellipsePerimeter(node, toward);
     case "diamond":
       return diamondPerimeter(node, toward);

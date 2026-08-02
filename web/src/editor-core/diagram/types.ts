@@ -58,6 +58,17 @@ export type NodeKind =
   | "loopLimit"
   | "merge"
   | "offPage"
+  // flowchart stencil parity (2026-08): tape, junctions, annotations, tables.
+  // Junctions are circular — perimeter.ts clips them with the ellipse formula.
+  | "paperTape"
+  | "summingJunction"
+  | "orJunction"
+  | "braceRight"
+  | "braceLeft"
+  | "bracketLeft"
+  | "bracketRight"
+  | "table"
+  | "tableHeader"
   // block arrows (features/diagram/shapes/arrows.tsx)
   | "arrowRight"
   | "arrowLeft"

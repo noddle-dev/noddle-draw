@@ -104,6 +104,17 @@ export const SHAPE_DEFS: ShapeDef[] = [
   { kind: "merge", group: "flowchart", label: "Merge", glyph: "▽", size: { w: 130, h: 100 }, text: "", polygon: MERGE },
   { kind: "offPage", group: "flowchart", label: "Off-page link", glyph: "⌂", size: { w: 110, h: 110 }, text: "A", polygon: OFF_PAGE },
   { kind: "note", group: "flowchart", label: "Note", glyph: "◪", size: { w: 130, h: 110 }, text: "Note" },
+  { kind: "paperTape", group: "flowchart", label: "Paper tape", glyph: "≋", size: { w: 150, h: 100 }, text: "Tape" },
+  { kind: "summingJunction", group: "flowchart", label: "Summing junction", glyph: "⊕", size: { w: 100, h: 100 }, text: "" },
+  { kind: "orJunction", group: "flowchart", label: "Or", glyph: "⊗", size: { w: 100, h: 100 }, text: "" },
+  // Annotations: the brace/bracket is drawn on ONE edge and the label keeps the
+  // box centre, so the text reads beside the mark (Lucid's annotation shape).
+  { kind: "braceRight", group: "flowchart", label: "Brace (right-facing)", glyph: "}", size: { w: 150, h: 110 }, text: "Note" },
+  { kind: "braceLeft", group: "flowchart", label: "Brace (left-facing)", glyph: "{", size: { w: 150, h: 110 }, text: "Note" },
+  { kind: "bracketLeft", group: "flowchart", label: "Bracket (left)", glyph: "[", size: { w: 150, h: 110 }, text: "Note" },
+  { kind: "bracketRight", group: "flowchart", label: "Bracket (right)", glyph: "]", size: { w: 150, h: 110 }, text: "Note" },
+  { kind: "table", group: "flowchart", label: "Table", glyph: "▦", size: { w: 170, h: 120 }, text: "" },
+  { kind: "tableHeader", group: "flowchart", label: "Table with header", glyph: "▥", size: { w: 170, h: 120 }, text: "" },
 
   // ---- arrows / connectors -------------------------------------------------
   { kind: "arrowRight", group: "arrows", label: "Arrow right", glyph: "➡", size: { w: 160, h: 80 }, text: "", polygon: ARROW_R },
