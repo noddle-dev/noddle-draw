@@ -240,7 +240,7 @@ export function NodeView({
           overlay must not sit on top of the resize grips or it steals their
           pointerdown and the shape can't be scaled. */}
       {(hovered || selected) && (
-        <ConnectionPorts node={node} onPreviewChange={onPreviewChange} />
+        <ConnectionPorts node={node} selected={selected} onPreviewChange={onPreviewChange} />
       )}
       {selected && (
         <rect
@@ -505,7 +505,10 @@ function ResizeHandles({ node }: { node: DiagramNode }) {
             vectorEffect="non-scaling-stroke"
             style={{ cursor: r.cur }}
             onPointerDown={startResize(r)}
-          />
+          >
+            {/* squares resize; the circles just outside draw arrows */}
+            <title>Drag to resize</title>
+          </rect>
         );
       })}
     </g>

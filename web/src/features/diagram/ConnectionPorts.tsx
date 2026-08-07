@@ -50,11 +50,21 @@ function mintEdgeId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/** How far outside the border the 4 cardinal dots sit while the node is
+ * SELECTED. On a selected node the side-midpoint resize grips occupy the
+ * exact same spots as the cardinal ports (and win the hit-test), which made
+ * arrows un-draggable until you deselected. Moving the dots just outside
+ * keeps both affordances visible and distinct: square ON the border =
+ * resize, circle OUTSIDE = draw an arrow (Lucid-style). */
+const SELECTED_OUT = 16;
+
 export function ConnectionPorts({
   node,
+  selected = false,
   onPreviewChange,
 }: {
   node: DiagramNode;
+  selected?: boolean;
   onPreviewChange: (p: PreviewEdge | null) => void;
 }) {
   // The live "you can connect here" dot — the cursor's position projected onto
@@ -271,8 +281,12 @@ export function ConnectionPorts({
         />
       )}
       {PORTS.filter((p) => p.id !== "c").map((port) => {
-        const px = node.x + port.rel.x * node.w;
-        const py = node.y + port.rel.y * node.h;
+        // Selected → shift the dot outward along the port's normal so it
+        // clears the side resize grip sitting on the border at the same spot.
+        const ox = selected ? Math.sign(port.rel.x - 0.5) * SELECTED_OUT : 0;
+        const oy = selected ? Math.sign(port.rel.y - 0.5) * SELECTED_OUT : 0;
+        const px = node.x + port.rel.x * node.w + ox;
+        const py = node.y + port.rel.y * node.h + oy;
         return (
           <g key={port.id}>
             {/* generous transparent hit target */}
