@@ -12,9 +12,11 @@
 import { api } from "../../shared/api/client";
 import type { DiagramEdge, DiagramNode } from "../../editor-core/diagram";
 import { useAppStore } from "../../state/appStore";
+import { commitHistoryNow } from "../../state/diagramHistory";
 import { useDiagramStore } from "../../state/diagramStore";
 import { useEditorStore } from "../../state/editorStore";
 import { usePagesStore } from "../../state/pagesStore";
+import { recordAiCheckpoint } from "./aiCheckpoints";
 
 function errText(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -61,6 +63,31 @@ function endpointOk(a: DiagramEdge["source"], nodes: Map<string, DiagramNode>): 
   return a.kind === "free" || nodes.has((a as { nodeId?: string }).nodeId ?? "");
 }
 
+// Fields the AI pipeline may drop (model forgets them / older servers strip
+// them) but that carry user data or look — when the AI "modifies" an object
+// and its output OMITS one of these while the live object has it, keep the
+// live value. Losing edge label blocks and z paint order this way was the
+// "text on arrows vanishes / layers reshuffle after an AI edit" bug.
+const NODE_PRESERVE = [
+  "fontSize", "bold", "italic", "underline", "textColor", "textAlign", "wrap",
+  "opacity", "cornerRadius", "strokeDash", "iconKey", "imageHref", "groupId", "z",
+] as const;
+const EDGE_PRESERVE = ["labels", "dash", "endHead", "startHead", "z"] as const;
+
+function withPreserved<T extends DiagramNode | DiagramEdge>(
+  ai: T,
+  current: T | undefined,
+  keys: readonly string[],
+): T {
+  if (!current) return ai;
+  const out = { ...ai } as unknown as Record<string, unknown>;
+  const cur = current as unknown as Record<string, unknown>;
+  for (const k of keys) {
+    if (!(k in out) && k in cur) out[k] = cur[k];
+  }
+  return out as T;
+}
+
 /**
  * Three-way merge of the model's result onto the CURRENT board.
  *
@@ -88,7 +115,9 @@ function mergeAiResult(
   for (const n of aiNodes) {
     aiNodeIds.add(n.id);
     const before = base.nodes.get(n.id);
-    if (before === undefined || before !== stableStringify(n)) nodes.set(n.id, n);
+    if (before === undefined || before !== stableStringify(n)) {
+      nodes.set(n.id, withPreserved(n, nodes.get(n.id), NODE_PRESERVE));
+    }
   }
   for (const id of base.nodes.keys()) {
     if (!aiNodeIds.has(id)) nodes.delete(id); // AI deleted it
@@ -98,7 +127,9 @@ function mergeAiResult(
   for (const e of aiEdges) {
     aiEdgeIds.add(e.id);
     const before = base.edges.get(e.id);
-    if (before === undefined || before !== stableStringify(e)) edges.set(e.id, e);
+    if (before === undefined || before !== stableStringify(e)) {
+      edges.set(e.id, withPreserved(e, edges.get(e.id), EDGE_PRESERVE));
+    }
   }
   for (const id of base.edges.keys()) {
     if (!aiEdgeIds.has(id)) edges.delete(id);
@@ -121,6 +152,9 @@ interface QueueItem {
   pageId: string | null;
   /** Optional reference image (data URL) sent to the vision model with the text. */
   image?: string;
+  /** Chat intent captured at ENQUEUE time (the user may flip the switch while
+   * a message waits): "edit" mutates the board, "ask" only answers. */
+  mode: "edit" | "ask";
 }
 
 const MAX_TURNS = 12;
@@ -153,16 +187,17 @@ function syncQueueCount() {
   useAppStore.setState({ queuedChats: queue.length });
 }
 
-/** Enqueue a chat-edit. Returns immediately; the drain loop does the work.
+/** Enqueue a chat message. Returns immediately; the drain loop does the work.
  * ``image`` optionally attaches a reference image (validated data URL) that is
- * sent to the vision model alongside the text. */
-export function askClaudeEdit(text: string, image?: string): void {
+ * sent to the vision model alongside the text. ``mode`` overrides the current
+ * chat-mode switch (programmatic edit actions always force "edit"). */
+export function askClaudeEdit(text: string, image?: string, mode?: "edit" | "ask"): void {
   const t = text.trim();
   if (!t) return;
   const docId = useEditorStore.getState().docId;
   const pageId = usePagesStore.getState().activeId;
   useAppStore.getState().pushChat(docId, { who: "you", text: t, ...(image ? { image } : {}) });
-  queue.push({ text: t, docId, pageId, image });
+  queue.push({ text: t, docId, pageId, image, mode: mode ?? useAppStore.getState().chatMode });
   syncQueueCount();
   void drain();
 }
@@ -173,6 +208,8 @@ export function askClaudeEditSelection(text: string, ids: string[]): void {
   if (!t || !ids.length) return;
   askClaudeEdit(
     `[Apply ONLY to the objects with id: ${ids.join(", ")} — keep everything else exactly unchanged] ${t}`,
+    undefined,
+    "edit",
   );
 }
 
@@ -180,6 +217,8 @@ export function askClaudeEditSelection(text: string, ids: string[]): void {
 export function askClaudeGroupBy(): void {
   askClaudeEdit(
     "Semantically analyze the objects and GROUP them: create a container (rect fill transparent + label node) for each group by tier/function, move the related nodes inside their corresponding frame (no overlap, keep a gap ≥40), and keep the edges and each node's style unchanged.",
+    undefined,
+    "edit",
   );
 }
 
@@ -227,21 +266,40 @@ async function drain(): Promise<void> {
           transcript.slice(-MAX_TURNS),
           undefined,
           item.image,
+          item.mode,
         );
-        // The user may have switched pages WHILE the model worked — applying
-        // now would overwrite the newly active page with page-A content.
-        if (item.pageId !== usePagesStore.getState().activeId) {
+        if (res.nodes == null || res.edges == null) {
+          // Answer-only: "ask" mode, or the model judged the message a
+          // question in edit mode — nothing touches the board.
+          useAppStore.getState().pushChat(item.docId, { who: "ai", text: res.message });
+        } else {
+          // The user may have switched pages WHILE the model worked — applying
+          // now would overwrite the newly active page with page-A content.
+          if (item.pageId !== usePagesStore.getState().activeId) {
+            useAppStore.getState().pushChat(item.docId, {
+              who: "ai",
+              text: "Done, but you switched pages while I was working — I dropped the result to avoid editing the wrong page. Switch back and ask again.",
+            });
+            continue;
+          }
+          // Apply the model's CHANGES onto the current board (not a blind
+          // replace) → renders locally AND syncs to all collab peers.
+          const merged = mergeAiResult(base, res.nodes, res.edges);
+          // Any in-flight user gesture becomes its own undo step first, then
+          // the AI edit is recorded as a rollback checkpoint (max 20/board)
+          // and committed as ONE immediately-⌘Z-able step of its own.
+          commitHistoryNow();
+          const checkpointId = recordAiCheckpoint(item.docId, item.text, merged.nodes, merged.edges);
+          if (checkpointId) {
+            useDiagramStore.getState().loadDiagram(merged.nodes, merged.edges);
+            commitHistoryNow();
+          }
           useAppStore.getState().pushChat(item.docId, {
             who: "ai",
-            text: "Done, but you switched pages while I was working — I dropped the result to avoid editing the wrong page. Switch back and ask again.",
+            text: res.message,
+            ...(checkpointId ? { checkpointId } : {}),
           });
-          continue;
         }
-        // Apply the model's CHANGES onto the current board (not a blind
-        // replace) → renders locally AND syncs to all collab peers.
-        const merged = mergeAiResult(base, res.nodes, res.edges);
-        useDiagramStore.getState().loadDiagram(merged.nodes, merged.edges);
-        useAppStore.getState().pushChat(item.docId, { who: "ai", text: res.message });
         if (res.usage) useAppStore.getState().addChatUsage(item.docId, res.usage);
         transcript.push({ role: "user", content: item.text });
         transcript.push({ role: "assistant", content: res.message });

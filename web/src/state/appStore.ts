@@ -27,6 +27,10 @@ export interface ChatMessage {
   /** Optional reference image sent with the message (data URL) — shown as a
    * small thumbnail in the bubble. Only on "you" messages that attached one. */
   image?: string;
+  /** AI messages that changed the board carry the checkpoint id of that edit
+   * — the bubble shows a Rollback button while the checkpoint is available
+   * (checkpoints are in-memory, max 20 per board; see aiCheckpoints.ts). */
+  checkpointId?: string;
 }
 
 /** Token usage accumulated over a chat session (cost tracking). */
@@ -180,6 +184,9 @@ interface AppState {
   aiThinking: boolean;
   /** Messages waiting in the sequential edit queue (input never locks). */
   queuedChats: number;
+  /** Chat intent: "edit" = co-editor touches the board; "ask" = tech
+   * consultant — the board is context only, never mutated. */
+  chatMode: "edit" | "ask";
 
   // ---- actions ----
   go: (view: View) => void;
@@ -212,6 +219,7 @@ interface AppState {
   /** Switch the active session of a board. */
   switchChatSession: (docId: string | null, sessionId: string) => void;
   setAiThinking: (v: boolean) => void;
+  setChatMode: (m: "edit" | "ask") => void;
 }
 
 /**
@@ -298,6 +306,7 @@ export const useAppStore = create<AppState>((set) => ({
   chats: loadChats(),
   aiThinking: false,
   queuedChats: 0,
+  chatMode: "edit",
 
   go: (view) => {
     if (view === "generate") pushUrl("/generate");
@@ -414,6 +423,7 @@ export const useAppStore = create<AppState>((set) => ({
     }),
 
   setAiThinking: (aiThinking) => set({ aiThinking }),
+  setChatMode: (chatMode) => set({ chatMode }),
 }));
 
 /** Parse the current location into shell state (boot + popstate). */

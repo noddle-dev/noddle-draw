@@ -1127,6 +1127,15 @@ button {
 .chat-typing span:nth-child(2) { animation-delay: .2s; }
 .chat-typing span:nth-child(3) { animation-delay: .4s; }
 .chat-foot { padding: 10px 15px; border-top: 1px solid var(--border-faint); }
+/* Draw/Ask intent switch — Draw edits the board, Ask is consult-only. */
+.chat-mode { display: inline-flex; gap: 0; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.chat-mode-btn { border: none; background: var(--panel); color: var(--text-2); font-size: 11.5px; padding: 5px 12px; cursor: pointer; }
+.chat-mode-btn + .chat-mode-btn { border-left: 1px solid var(--border); }
+.chat-mode-btn.active { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+.chat-mode-btn:hover:not(.active) { background: var(--panel-2); }
+/* Revert button on AI bubbles whose edit is still rollback-able. */
+.chat-rollback { display: block; margin-top: 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); color: var(--text-2); font-size: 11px; padding: 3px 10px; cursor: pointer; }
+.chat-rollback:hover { border-color: var(--accent); color: var(--accent-deep); background: var(--accent-soft); }
 .chat-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .chat-suggest button { border: 1px solid var(--border); border-radius: 20px; padding: 5px 11px; font-size: 11.5px; color: var(--text-2); cursor: pointer; background: var(--panel); }
 .chat-suggest button:hover { border-color: var(--purple); color: var(--purple); background: var(--purple-soft-2); }

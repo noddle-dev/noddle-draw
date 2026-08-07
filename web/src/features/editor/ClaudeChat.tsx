@@ -16,6 +16,7 @@ import { getAiKeyConfig } from "../../shared/api/client";
 import { poolInfo, poolInfoSync } from "../../shared/poolConfig";
 import { getIdentity } from "../../state/collabStore";
 import { AiKeySettings } from "../ai/AiKeySettings";
+import { rollbackAiCheckpoint, useAiCheckpoints } from "./aiCheckpoints";
 import { askClaudeEdit } from "./claudeEdit";
 import { CHAT_SUGGESTIONS } from "./data";
 
@@ -84,6 +85,9 @@ export function ClaudeChat() {
   const queuedChats = useAppStore((s) => s.queuedChats);
   const newChatSession = useAppStore((s) => s.newChatSession);
   const switchChatSession = useAppStore((s) => s.switchChatSession);
+  const chatMode = useAppStore((s) => s.chatMode);
+  const setChatMode = useAppStore((s) => s.setChatMode);
+  const rollbackable = useAiCheckpoints((s) => s.available);
   const [image, setImage] = useState<string | null>(null);
   const [imgErr, setImgErr] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -129,6 +133,21 @@ export function ClaudeChat() {
     askClaudeEdit(t, image ?? undefined); // enqueued — never locks
     setImage(null);
     setImgErr(null);
+  };
+
+  /** Roll the board back to the state before the AI edit behind `cpId` (and
+   * every AI edit after it). Only AI-touched objects revert; the rollback is
+   * itself one ⌘Z-able undo step. */
+  const rollback = (cpId: string) => {
+    const r = rollbackAiCheckpoint(docId, cpId);
+    useAppStore.getState().pushChat(docId, {
+      who: "ai",
+      text: r.ok
+        ? `Rolled back ${r.reverted} AI edit${r.reverted === 1 ? "" : "s"}. (⌘Z undoes the rollback.)`
+        : r.reason === "wrong-page"
+          ? "That edit was made on another page — switch back to it to roll back."
+          : "That rollback point is no longer available (max 20 are kept, and they reset on reload).",
+    });
   };
 
   /** Paste an image straight into the chat (⌘V on macOS, Ctrl+V on Windows/
@@ -242,6 +261,15 @@ export function ClaudeChat() {
             <div className={`chat-bubble ${m.who === "you" ? "you" : "ai"}`}>
               {m.image && <img className="chat-msg-thumb" src={m.image} alt="attached reference" />}
               {m.text}
+              {m.checkpointId && rollbackable[m.checkpointId] && (
+                <button
+                  className="chat-rollback"
+                  title="Revert this AI edit (and any AI edits after it)"
+                  onClick={() => rollback(m.checkpointId!)}
+                >
+                  ↩ Rollback
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -256,11 +284,36 @@ export function ClaudeChat() {
         )}
       </div>
       <div className="chat-foot">
-        <div className="chat-suggest">
-          {CHAT_SUGGESTIONS.map((s) => (
-            <button key={s} onClick={() => send(s)}>{s}</button>
-          ))}
+        {/* Draw edits the board; Ask is a tech consultant (board = context
+            only, never mutated) — so questions get real answers instead of
+            being forced through the editing contract. */}
+        <div className="chat-mode" role="radiogroup" aria-label="Chat mode">
+          <button
+            className={`chat-mode-btn${chatMode === "edit" ? " active" : ""}`}
+            role="radio"
+            aria-checked={chatMode === "edit"}
+            title="Messages edit the board"
+            onClick={() => setChatMode("edit")}
+          >
+            ✏️ Draw
+          </button>
+          <button
+            className={`chat-mode-btn${chatMode === "ask" ? " active" : ""}`}
+            role="radio"
+            aria-checked={chatMode === "ask"}
+            title="Ask questions / get advice — the board is never changed"
+            onClick={() => setChatMode("ask")}
+          >
+            💬 Ask
+          </button>
         </div>
+        {chatMode === "edit" && (
+          <div className="chat-suggest">
+            {CHAT_SUGGESTIONS.map((s) => (
+              <button key={s} onClick={() => send(s)}>{s}</button>
+            ))}
+          </div>
+        )}
         {(image || imgErr) && (
           <div className="chat-attach-preview">
             {image && (
@@ -301,7 +354,13 @@ export function ClaudeChat() {
             defaultValue=""
             // Keep the placeholder SHORT — a wrapping placeholder overflows
             // the 1-row box (text clipped mid-line under the border).
-            placeholder={aiThinking ? "Keep typing — messages queue up…" : "Ask AI-Noddle to edit the diagram…"}
+            placeholder={
+              aiThinking
+                ? "Keep typing — messages queue up…"
+                : chatMode === "ask"
+                  ? "Ask anything — the board is context, not edited…"
+                  : "Ask AI-Noddle to edit the diagram…"
+            }
             // auto-grow up to the CSS max-height, then scroll
             onInput={(e) => {
               const el = e.currentTarget;

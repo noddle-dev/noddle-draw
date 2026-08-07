@@ -453,7 +453,15 @@ export const api = {
     history: { role: "user" | "assistant"; content: string }[] = [],
     model?: string,
     image?: string,
-  ): Promise<{ message: string; usage?: { prompt: number; completion: number; total: number } } & TextToDiagramOut> {
+    mode: "edit" | "ask" = "edit",
+  ): Promise<{
+    message: string;
+    usage?: { prompt: number; completion: number; total: number };
+    // null nodes/edges = answer-only response (question, or "ask" mode) —
+    // nothing to apply to the board.
+    nodes: TextToDiagramOut["nodes"] | null;
+    edges: TextToDiagramOut["edges"] | null;
+  }> {
     const res = await fetch(`${BASE}/api/ai/edit-diagram`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await aiHeaders()) },
@@ -461,10 +469,16 @@ export const api = {
         instruction,
         diagram,
         history,
+        mode,
         ...(model ? { model } : {}),
         ...(image ? { image } : {}),
       }),
     });
-    return json<{ message: string; usage?: { prompt: number; completion: number; total: number } } & TextToDiagramOut>(res);
+    return json<{
+      message: string;
+      usage?: { prompt: number; completion: number; total: number };
+      nodes: TextToDiagramOut["nodes"] | null;
+      edges: TextToDiagramOut["edges"] | null;
+    }>(res);
   },
 };

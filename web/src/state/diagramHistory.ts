@@ -97,6 +97,26 @@ export function pauseHistory<T>(fn: () => T): T {
   }
 }
 
+/** Flush any pending (debounced) change into an undo step RIGHT NOW.
+ * Used around programmatic-but-undoable mutations (AI edits): call before
+ * applying so the user's in-flight gesture becomes its own step, and after
+ * so the mutation is one immediately-undoable step of its own. */
+export function commitHistoryNow(): void {
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  if (paused > 0) return;
+  const now = snap();
+  const step = diff(committed, now);
+  if (!step) return;
+  past.push(step);
+  if (past.length > 200) past.shift();
+  future = [];
+  committed = now;
+  sync();
+}
+
 export function resetHistory() {
   past = [];
   future = [];
