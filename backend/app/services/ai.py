@@ -218,6 +218,45 @@ _DIAGRAM_JSON_SHAPE = (
     "optional."
 )
 
+# Vision path (sketch / whiteboard photo / screenshot -> editable diagram).
+# Reconstruction, not text authoring, so it gets its own instructions: a role
+# framing, a numbered read→nodes→edges→layout procedure, and a shape→kind map
+# keyed on DRAWN GEOMETRY (the generic _DIAGRAM_RULES keys on meaning, which a
+# vision model can't see). Faithfulness beats tidiness: reproduce what's drawn,
+# invent nothing. The shared _DIAGRAM_JSON_SHAPE contract still follows.
+_IMAGE_DIAGRAM_RULES = (
+    "You reconstruct a hand-drawn sketch, whiteboard photo, or diagram "
+    "screenshot as an EDITABLE node/edge diagram — not a picture of one. "
+    "Someone keeps editing your output, so it must be clean and faithful: "
+    "every shape and connector that is drawn, and nothing that isn't.\n"
+    "Work through the image in this order (reason silently, then emit only the "
+    "JSON):\n"
+    "1. Read every legible mark — box text, arrow labels, headings. Keep the "
+    "original language and wording; do not translate or paraphrase.\n"
+    "2. Find the NODES: each distinct shape or labelled region is one node. "
+    "Merge a label with the shape enclosing it. Ignore doodles, smudges, "
+    "shadows, grid lines and decoration.\n"
+    "3. Find the EDGES: each connector is one directed edge. Take direction "
+    "from the arrowhead; with no arrowhead, point from the upper/left shape to "
+    "the lower/right one. A line touching two shapes is an edge, never a node.\n"
+    "4. Lay it out: set each node's col/row so their ORDER mirrors where the "
+    "shape sits in the image (left→right = increasing col, top→bottom = "
+    "increasing row). Use small consecutive integers starting at 0 (0, 1, "
+    "2, …) — these are grid cells, not pixel coordinates, so keep them "
+    "compact.\n"
+    "Map each shape to a kind by its DRAWN GEOMETRY, not its meaning:\n"
+    "- oval / pill / rounded terminator (typically a start or end) -> \"ellipse\"\n"
+    "- rhombus / rotated square / any point that branches to several exits -> \"diamond\"\n"
+    "- rectangle with rounded corners (a step or action) -> \"rounded\"\n"
+    "- sharp-cornered rectangle (a plain box or data store) -> \"rect\"\n"
+    "Rules: reproduce only what is drawn — never invent nodes/edges to complete "
+    "a flow, and never drop a shape you can see. No two nodes share the same "
+    "col+row. Every node gets a short stable id (letters, digits, underscores) "
+    "and a human-readable label; if a shape's text is unreadable, label it "
+    "\"?\" rather than guessing. Add an edge label only when the drawing shows "
+    "one (e.g. \"yes\"/\"no\")."
+)
+
 
 def _extract_usage(data: dict, model: str = "") -> dict:
     """Normalize a provider's token usage into one shape:
@@ -267,15 +306,26 @@ _EMPTY_USAGE = {
 def _provider_error_message(body: str) -> str:
     """Pull the human-readable message out of a provider error body. OpenAI /
     OpenRouter / Gemini return {"error": {"message": "..."}} (or a bare
-    string); fall back to the raw snippet. No secrets are in these bodies."""
+    string). OpenRouter wraps the real upstream reason in
+    ``error.metadata.raw`` and leaves a generic "Provider returned error" up
+    top, so prefer the nested reason when the top-level one is uninformative.
+    Never surface a raw JSON blob (parse failure / truncated body) — a wall of
+    braces helps nobody. No secrets are in these bodies."""
+    body = (body or "").strip()
     try:
         d = json.loads(body)
-        err = d.get("error", d) if isinstance(d, dict) else d
-        if isinstance(err, dict):
-            return str(err.get("message") or err.get("detail") or "")[:300]
-        return str(err)[:300]
     except (ValueError, TypeError):
-        return body.strip()[:300]
+        # Not JSON, or a body truncated mid-object — don't dump braces at users.
+        return "" if body[:1] in "{[" else body[:300]
+    err = d.get("error", d) if isinstance(d, dict) else d
+    if not isinstance(err, dict):
+        return str(err)[:300]
+    msg = str(err.get("message") or err.get("detail") or "").strip()
+    meta = err.get("metadata")
+    raw = str(meta.get("raw")).strip() if isinstance(meta, dict) and meta.get("raw") else ""
+    if raw and (not msg or "provider returned error" in msg.lower()):
+        msg = raw
+    return msg[:300]
 
 
 def _strip_fences(text: str) -> str:
@@ -749,10 +799,12 @@ class AIService:
             with urllib.request.urlopen(req, timeout=timeout or _HTTP_TIMEOUT) as r:
                 data = json.load(r)
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:400]
-            # Surface the provider's own explanation — a bare "rejected the key"
-            # hid the real cause (data policy, no credits, model not enabled,
-            # missing headers…). Safe to show: it's the caller's own BYOK error.
+            # Parse the FULL body (a mid-object [:400] truncation breaks the
+            # JSON and used to leak the raw blob at users). _provider_error_message
+            # extracts + bounds the human reason; a bare "rejected the key" hid the
+            # real cause (data policy, no credits, model not enabled, missing
+            # headers…). Safe to show: it's the caller's own BYOK error.
+            detail = e.read().decode("utf-8", "replace")
             msg = _provider_error_message(detail)
             if e.code in (401, 403):
                 raise AIUnavailable(
@@ -765,7 +817,7 @@ class AIService:
                     f"AI provider is temporarily unavailable (HTTP {e.code})"
                     + (f": {msg}" if msg else "") + " — retrying may succeed."
                 ) from e
-            raise AIBadOutput(f"AI provider returned HTTP {e.code}: {msg or detail}") from e
+            raise AIBadOutput(f"AI provider returned HTTP {e.code}: {msg or detail[:300]}") from e
         except TimeoutError as e:
             raise AIRetryable("AI response took too long (timeout) — try again or shorten the request.") from e
         except urllib.error.URLError as e:
@@ -955,15 +1007,7 @@ class AIService:
         """
         b64 = base64.standard_b64encode(raw).decode()
         data_uri = f"data:{media_type};base64,{b64}"
-        text = (
-            "The attached image is a sketch / whiteboard photo / diagram "
-            "screenshot. Recreate its STRUCTURE as an editable node/edge "
-            "diagram — identify the boxes, decisions, start/end points and "
-            "the arrows between them. Use the text you can read in the image "
-            "as node labels (keep the original language). Preserve the rough "
-            "spatial arrangement via the grid.\n\n"
-            f"{_DIAGRAM_RULES}\n\n{_DIAGRAM_JSON_SHAPE}"
-        )
+        text = f"{_IMAGE_DIAGRAM_RULES}\n\n{_DIAGRAM_JSON_SHAPE}"
         if enrichment:
             text += (
                 "\n\nUser enrichment instructions (follow them for naming/"
@@ -1030,6 +1074,7 @@ class AIService:
         settings: ProviderSettings | None = None,
         model: str | None = None,
         image: str | None = None,
+        mode: str = "edit",
     ) -> dict:
         """Apply a natural-language instruction to the CURRENT diagram.
 
@@ -1049,7 +1094,17 @@ class AIService:
         ``image_url`` content block (same shape ``image_to_svg`` uses), so the
         user can say "recreate this screenshot" or "match these colors". Absent
         ⇒ text-only, identical behavior.
+
+        ``mode`` "ask" answers a question with the board as CONTEXT ONLY (no
+        mutation, long-form reply); "edit" (default) is the co-editing contract,
+        where the model may still return ``diagram: null`` for pure questions.
+        Both return the same envelope — ``nodes``/``edges`` are None whenever
+        nothing should be applied.
         """
+        if mode == "ask":
+            return self._ask_about_diagram(
+                diagram, instruction, history, settings=settings, model=model, image=image
+            )
         current = json.dumps(
             {"nodes": diagram.get("nodes", []), "edges": diagram.get("edges", [])},
             ensure_ascii=False,
@@ -1061,10 +1116,16 @@ class AIService:
             "and return the FULL updated diagram. Other humans are editing the "
             "same board live, so touch ONLY what the instruction asks for.\n"
             "\n## Board model\n"
-            '- node: {"id","kind":"rect|rounded|ellipse|diamond","x","y" (top-left),'
+            '- node: {"id","kind":"rect|rounded|ellipse|diamond|…" (many more '
+            'catalog kinds exist — keep any kind you see),"x","y" (top-left),'
             '"w","h","text" (single line),"fill","stroke","strokeWidth",'
             '"anim"?:"pulse|glow|breathe|wobble","animSpeed"?:0.5|1|2,'
             '"rotation"?:degrees clockwise around the node center}\n'
+            "  nodes may also carry optional format fields (\"fontSize\",\"bold\","
+            '"italic","underline","textColor","textAlign","wrap","opacity",'
+            '"cornerRadius","strokeDash","groupId","iconKey","imageHref","z" '
+            "(paint order, higher = on top)) — echo them back EXACTLY on nodes "
+            "you keep; set them only when the instruction asks.\n"
             "- CONTAINERS/GROUPS are a convention: a large rect node with fill "
             '"transparent" acts as a group frame, with a separate small label '
             'node (fill AND stroke "transparent") as its title. Children simply '
@@ -1074,7 +1135,11 @@ class AIService:
             '- edge: {"id","source","target","routing":"straight|elbow","stroke",'
             '"strokeWidth","endArrow","startArrow","animated",'
             '"flowStyle"?:"dash|dots|beam|pulse","flowSpeed"?:0.5|1|2,'
-            '"flowIntensity"?:"subtle|normal|strong","label"?,"waypoints"?}\n'
+            '"flowIntensity"?:"subtle|normal|strong","label"?,"waypoints"?,'
+            '"dash"?:"dashed|dotted","endHead"?/"startHead"?:"none|arrow|'
+            'triangle|circle|diamond",'
+            '"labels"?:[{"id","t":0..1 position along the line,"text"}] '
+            '(user text blocks ON the arrow — NEVER drop them),"z"?}\n'
             '  attachment = {"kind":"floating","nodeId"} | '
             '{"kind":"port","nodeId","rel":{"x","y"}} (rel on the border: '
             '{"x":0.5,"y":0}=top, {"x":1,"y":0.5}=right, {"x":0.5,"y":1}=bottom, '
@@ -1101,13 +1166,17 @@ class AIService:
             "group you are adding into (e.g. green compute, purple control "
             "plane, tan infra) when one exists.\n"
             "- Deleting a node also deletes every edge touching it.\n"
-            "- If the instruction is a question or needs no change, return the "
-            "diagram UNCHANGED and answer in \"message\".\n"
+            "- Objects may carry extra fields not documented here — echo them "
+            "back EXACTLY on objects you keep; never invent or strip fields.\n"
+            '- If the instruction is a QUESTION, a request for advice, or needs '
+            'no board change, set "diagram": null and put your full answer in '
+            '"message" — do NOT re-emit the board.\n'
             "- Output must be COMPLETE valid JSON — never truncate the node or "
             "edge list; emit compact JSON (no pretty-printing).\n"
             '\nRespond with ONLY a JSON object (no prose, no code fences): '
-            '{"message":"<one short sentence, in the user\'s language, about what you changed>",'
-            '"diagram":{"nodes":[...],"edges":[...]}}\n\n'
+            '{"message":"<in the user\'s language: one short sentence about what '
+            'you changed — or, when "diagram" is null, your full answer>",'
+            '"diagram":{"nodes":[...],"edges":[...]} | null}\n\n'
         )
         if image:
             prompt += (
@@ -1148,10 +1217,20 @@ class AIService:
             messages, max_tokens=16000, settings=settings, endpoint=endpoint
         )
         result = data.get("diagram")
+        if result is None:
+            # The model judged this a question / no-op — nothing to apply. The
+            # client checks nodes/edges for null and skips the board merge.
+            message = str(data.get("message") or "").strip()[:6000] or "Nothing to change."
+            return {
+                "message": message,
+                "nodes": None,
+                "edges": None,
+                "usage": self.last_call_usage(),
+            }
         if not isinstance(result, dict):
             raise AIBadOutput("Result is missing 'diagram'.", raw=raw)
         nodes, edges = self._normalize_full_diagram(result)
-        message = str(data.get("message") or "Diagram updated.")[:300]
+        message = str(data.get("message") or "Diagram updated.")[:600]
         return {
             "message": message,
             "nodes": nodes,
@@ -1159,19 +1238,100 @@ class AIService:
             "usage": self.last_call_usage(),
         }
 
+    def _ask_about_diagram(
+        self,
+        diagram: dict,
+        instruction: str,
+        history: list[dict] | None = None,
+        settings: ProviderSettings | None = None,
+        model: str | None = None,
+        image: str | None = None,
+    ) -> dict:
+        """Consultant mode: answer a question with the board as CONTEXT ONLY.
+
+        The editing contract forces short "what I changed" replies, which made
+        the co-editor useless for "is this architecture right?" questions.
+        This path never mutates the board, so the model can answer at length
+        (best practices, reviews, trade-offs). Same envelope as
+        ``edit_diagram`` with ``nodes``/``edges`` = None.
+        """
+        current = json.dumps(
+            {"nodes": diagram.get("nodes", []), "edges": diagram.get("edges", [])},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        prompt = (
+            "You are Claude — a senior software architect and technical "
+            "consultant embedded in noddle, a collaborative diagram board. "
+            "The user is ASKING, not editing: do not change the board. Use "
+            "the CURRENT diagram JSON below as context when relevant "
+            "(architecture reviews, best practices, missing components, "
+            "naming, trade-offs) and answer directly and concretely, in the "
+            "user's language.\n"
+            "Respond with ONLY a JSON object (no code fences): "
+            '{"message":"<your full answer — plain text, short paragraphs '
+            'and simple - bullets>"}\n\n'
+        )
+        if image:
+            prompt += "An image is ATTACHED as a visual reference for the question.\n\n"
+        prompt += f"CURRENT diagram JSON:\n{current}\n\nQuestion: {instruction}"
+
+        messages: list[dict] = []
+        for h in (history or [])[-12:]:
+            role = h.get("role")
+            content = str(h.get("content", ""))[:2000]
+            if role in ("user", "assistant") and content.strip():
+                messages.append({"role": role, "content": content})
+        if image:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image}},
+                    ],
+                }
+            )
+        else:
+            messages.append({"role": "user", "content": prompt})
+
+        endpoint = self._resolve_endpoint(model)
+        data, _raw = self._chat_json(
+            messages, max_tokens=8000, settings=settings, endpoint=endpoint
+        )
+        message = str(data.get("message") or "").strip()[:6000] or (
+            "I couldn't produce an answer — please rephrase the question."
+        )
+        return {
+            "message": message,
+            "nodes": None,
+            "edges": None,
+            "usage": self.last_call_usage(),
+        }
+
     @staticmethod
     def _normalize_full_diagram(diagram: dict) -> tuple[list, list]:
-        """Defensive normalization of a model-produced FULL diagram."""
-        KINDS = {"rect", "rounded", "ellipse", "diamond"}
+        """Defensive normalization of a model-produced FULL diagram.
+
+        IMPORTANT: this must round-trip every field the editor UI writes
+        (see web/src/editor-core/diagram/types.ts). Stripping a field here
+        silently destroys user data on every AI edit — that is exactly how
+        edge label blocks and z paint order used to vanish.
+        """
 
         def num(v: object, dflt: float) -> float:
             return float(v) if isinstance(v, (int, float)) else dflt
 
-        def speed(v: object) -> float | None:
-            # 0.5 | 1 | 2 (bool is an int subclass — reject it explicitly)
-            if isinstance(v, (int, float)) and not isinstance(v, bool) and float(v) in (0.5, 1.0, 2.0):
+        def opt_num(v: object) -> float | None:
+            # bool is an int subclass — reject it explicitly
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 return float(v)
             return None
+
+        def speed(v: object) -> float | None:
+            # 0.5 | 1 | 2 (legacy discrete FlowSpeed)
+            f = opt_num(v)
+            return f if f in (0.5, 1.0, 2.0) else None
 
         nodes: list[dict] = []
         seen: set[str] = set()
@@ -1187,9 +1347,19 @@ class AIService:
                 nid = f"{base}_{k}"
                 k += 1
             seen.add(nid)
+            # The shape catalog lives in the frontend (shapeDefs) and keeps
+            # growing — accept any identifier-shaped kind instead of coercing
+            # catalog shapes (cylinder, sticky, offPage…) down to "rounded";
+            # the renderer has a default case for kinds it doesn't know.
+            raw_kind = n.get("kind")
+            kind = (
+                raw_kind
+                if isinstance(raw_kind, str) and raw_kind.isidentifier() and len(raw_kind) <= 40
+                else "rounded"
+            )
             node: dict = {
                 "id": nid,
-                "kind": n.get("kind") if n.get("kind") in KINDS else "rounded",
+                "kind": kind,
                 "x": num(n.get("x"), 60 + (i % 3) * 220),
                 "y": num(n.get("y"), 60 + (i // 3) * 150),
                 "w": max(20.0, num(n.get("w"), 150)),
@@ -1209,6 +1379,35 @@ class AIService:
             rot = n.get("rotation")
             if isinstance(rot, (int, float)) and not isinstance(rot, bool) and float(rot) % 360:
                 node["rotation"] = round(float(rot) % 360, 1)
+            # Lucid-style format fields the UI writes — validated passthrough.
+            fs = opt_num(n.get("fontSize"))
+            if fs is not None:
+                node["fontSize"] = min(200.0, max(6.0, fs))
+            for flag in ("bold", "italic", "underline", "wrap"):
+                if n.get(flag) is True:
+                    node[flag] = True
+            if isinstance(n.get("textColor"), str):
+                node["textColor"] = n["textColor"][:32]
+            if n.get("textAlign") in ("left", "center", "right"):
+                node["textAlign"] = n["textAlign"]
+            op = opt_num(n.get("opacity"))
+            if op is not None:
+                node["opacity"] = min(1.0, max(0.0, op))
+            cr = opt_num(n.get("cornerRadius"))
+            if cr is not None:
+                node["cornerRadius"] = min(200.0, max(0.0, cr))
+            if n.get("strokeDash") in ("solid", "dashed", "dotted"):
+                node["strokeDash"] = n["strokeDash"]
+            if isinstance(n.get("iconKey"), str):
+                node["iconKey"] = n["iconKey"][:64]
+            href = n.get("imageHref")
+            if isinstance(href, str) and href.startswith("data:image/") and len(href) <= 500_000:
+                node["imageHref"] = href
+            if isinstance(n.get("groupId"), str):
+                node["groupId"] = n["groupId"][:64]
+            z = opt_num(n.get("z"))
+            if z is not None:
+                node["z"] = z
             nodes.append(node)
 
         def attachment(v: object) -> dict | None:
@@ -1265,12 +1464,45 @@ class AIService:
             label = e.get("label")
             if isinstance(label, str) and label.strip():
                 edge["label"] = label.strip()[:120]
+            # Multi-label text blocks along the line (Lucid-style). These are
+            # user content — dropping them here was the "text on the arrow
+            # vanishes after an AI edit" bug.
+            raw_labels = e.get("labels")
+            if isinstance(raw_labels, list):
+                blocks: list[dict] = []
+                for j, b in enumerate(raw_labels[:12]):
+                    if not isinstance(b, dict):
+                        continue
+                    btext = b.get("text")
+                    if not isinstance(btext, str) or not btext.strip():
+                        continue
+                    t = opt_num(b.get("t"))
+                    blocks.append(
+                        {
+                            "id": str(b.get("id") or f"l{j}")[:24],
+                            "t": min(1.0, max(0.0, t if t is not None else 0.5)),
+                            "text": btext[:300],
+                        }
+                    )
+                if blocks:
+                    edge["labels"] = blocks
             if e.get("flowStyle") in ("dash", "dots", "beam", "pulse"):
                 edge["flowStyle"] = e["flowStyle"]
-            if speed(e.get("flowSpeed")) is not None:
-                edge["flowSpeed"] = speed(e.get("flowSpeed"))
+            # flowSpeed is continuous these days (UI slider maps to value/50);
+            # the legacy 0.5|1|2 values fall inside the clamp too.
+            fspeed = opt_num(e.get("flowSpeed"))
+            if fspeed is not None and 0 < fspeed <= 10:
+                edge["flowSpeed"] = fspeed
             if e.get("flowIntensity") in ("subtle", "normal", "strong"):
                 edge["flowIntensity"] = e["flowIntensity"]
+            if e.get("dash") in ("dashed", "dotted"):
+                edge["dash"] = e["dash"]
+            for side in ("endHead", "startHead"):
+                if e.get(side) in ("none", "arrow", "triangle", "circle", "diamond"):
+                    edge[side] = e[side]
+            ez = opt_num(e.get("z"))
+            if ez is not None:
+                edge["z"] = ez
             wps = e.get("waypoints")
             if isinstance(wps, list) and wps:
                 pts = [

@@ -309,6 +309,7 @@ async def edit_diagram(
             settings=backend,
             model=model,
             image=image,
+            mode=body.mode,
         )
     except AIUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))

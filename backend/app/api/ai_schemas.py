@@ -71,6 +71,11 @@ class EditDiagramBody(BaseModel):
     instruction: str
     diagram: dict
     history: list[dict] = []
+    # "edit" (default): live co-editing contract — the model returns the full
+    # updated diagram, or diagram:null when the message is a pure question.
+    # "ask": tech-consultant mode — the diagram is context only, the board is
+    # never mutated and the answer may be long-form.
+    mode: Literal["edit", "ask"] = "edit"
     # Optional reference image (data:image/(png|jpeg|webp);base64,… — validated
     # + size-capped by validate_chat_image in the router). Sent to the vision
     # model alongside the instruction so users can say "recreate this screenshot"
