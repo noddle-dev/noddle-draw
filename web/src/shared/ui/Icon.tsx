@@ -119,25 +119,26 @@ const PATHS: Record<IconName, JSX.Element> = {
 };
 
 /**
- * The NODDLE brand mark — canonical per BRAND.md §2 and synced with
- * the noddle brand mark: a SOLID warm-charcoal tile
- * (--color-logo-tile #211e19 — never a gradient), a white diamond (nib)
- * outline rotated 45°, and the Ember Orange dot (--color-ember #ea580c)
- * top-right. Drawn as real vector geometry so it never renders "broken" at
- * small sizes. Fills its `.brand-mark` box. Change the mark
- * first, then mirror here + web/public/{logo,favicon}.svg.
+ * The NODDLE DRAW product mark — synced from
+ * noddle_artifact/branding/product-icons/draw.svg (edit THERE first, then
+ * mirror here + web/public/{logo,favicon}.svg): the family tile
+ * (--color-logo-tile #211e19 — never a gradient) + Ember Orange dot
+ * (--color-ember #ea580c) top-right, with draw's own glyph — a freehand
+ * scribble stroke. The diamond nib now belongs to Noddle Board only, so the
+ * two products read as siblings, not twins. Drawn as real vector geometry so
+ * it never renders "broken" at small sizes. Fills its `.brand-mark` box.
  */
 export function BrandLogo({ size = "100%" }: { size?: number | string }) {
   return (
     <svg viewBox="0 0 32 32" width={size} height={size} style={{ display: "block" }} aria-hidden="true">
       <rect x="0" y="0" width="32" height="32" rx="9" fill="#211e19" />
-      {/* centered diamond (rotated rounded square outline) */}
-      <rect
-        x="10.4" y="10.4" width="11.2" height="11.2" rx="2.4"
-        transform="rotate(45 16 16)"
+      {/* freehand scribble stroke — draw's glyph */}
+      <path
+        d="M8 21 C 10 12, 14 12, 15.5 16.5 C 17 21, 20 21.5, 23 13.5"
         fill="none" stroke="#fff" strokeWidth="2.4"
+        strokeLinecap="round" strokeLinejoin="round"
       />
-      {/* ember accent dot, top-right (the "spark on the nib") */}
+      {/* ember accent dot, top-right (the family signature) */}
       <circle cx="24" cy="8" r="3.6" fill="#ea580c" stroke="#211e19" strokeWidth="1.6" />
     </svg>
   );

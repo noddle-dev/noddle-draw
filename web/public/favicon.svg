@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- NODDLE brand mark, canonical (BRAND.md §2): SOLID warm-charcoal tile
-       (color-logo-tile #211e19, never a gradient), white diamond (nib)
-       outline rotated 45°, Ember Orange dot (color-ember #ea580c) top-right. -->
+  <!-- NODDLE DRAW product icon (synced from noddle_artifact/branding/
+       product-icons/draw.svg — edit there first): family tile #211e19 +
+       ember dot #ea580c, glyph = freehand scribble stroke. -->
   <rect x="0" y="0" width="32" height="32" rx="9" fill="#211e19"/>
-  <rect x="10.4" y="10.4" width="11.2" height="11.2" rx="2.4"
-        transform="rotate(45 16 16)" fill="none" stroke="#fff" stroke-width="2.4"/>
+  <path d="M8 21 C 10 12, 14 12, 15.5 16.5 C 17 21, 20 21.5, 23 13.5"
+        fill="none" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="24" cy="8" r="3.6" fill="#ea580c" stroke="#211e19" stroke-width="1.6"/>
 </svg>
