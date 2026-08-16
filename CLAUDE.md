@@ -129,3 +129,22 @@ There is no Python linter/formatter config checked in; match surrounding style.
 - SPA deep-link routes (`/d/{id}`, `/embed/{id}`, `/generate`) are enumerated
   in `app/main.py` to serve the SPA shell — add new client routes there or a
   reload 404s.
+
+## Contracts
+
+`contracts/` is the machine-checked SSOT for the domain, the API and the
+architecture — read it before changing any of those:
+
+- `contracts/business-spec.yaml` — actors, link-policy matrix, flows, verbatim
+  error copy, acceptance criteria.
+- `contracts/openapi.yaml` — every `/api` route, the DiagramNode/DiagramEdge
+  entity model (mirrors `web/src/editor-core/diagram/types.ts` one-to-one),
+  the WS protocol note.
+- `contracts/architecture.yaml` — layers, per-file ownership, ADRs (the Hard
+  rules above are recorded there as ADR-001…011 with rationale).
+
+Guards live in `tests/test_spec.py` (canonical; CI runs them via
+`backend/tests/test_contract_spec.py`). A schema change is a contract change
+in the same commit — `openapi.yaml`, `types.ts` and
+`_normalize_full_diagram` move together or the guards go red. If you find the
+contract wrong, report it — don't edit it as a side effect of a feature.

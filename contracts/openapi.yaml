@@ -1,0 +1,1000 @@
+openapi: 3.1.0
+info:
+  title: noddle draw API
+  version: "1.0"
+  description: >-
+    Contract is the SSOT — backend DTOs (backend/app/api/schemas.py,
+    ai_schemas.py) and the frontend diagram types
+    (web/src/editor-core/diagram/types.ts) mirror this file.
+
+    IDENTITY: there is none. noddle draw is anonymous-only (Excalidraw
+    semantics) — the board URL is the capability, and authorization reduces
+    to the document's link_policy (see business-spec.yaml#link_policy).
+    The only header-borne values are the per-request BYOK AI settings
+    (X-AI-*) and the anonymous job-history bucket (X-Client-Id) — neither is
+    a credential the server stores.
+servers:
+  - url: http://localhost:8000
+    description: local (uvicorn or docker compose; SPA served same-origin)
+  - url: https://draw.noddle.dev
+    description: production
+tags:
+  - name: documents
+    description: Board CRUD, export and version history (anonymous, link-gated)
+  - name: comments
+    description: Anonymous comment threads per board
+  - name: ai
+    description: BYOK AI co-editor (per-request keys, pool fallback)
+  - name: system
+    description: Config flags and liveness
+security: []   # anonymous product — no operation carries a security requirement
+
+# ---- WebSocket (not an HTTP operation; documented here so the wire protocol
+# has a home in the contract). The docstring of backend/app/api/collab.py is
+# the authoritative spec — update BOTH on any wire change.
+x-websocket-protocol:
+  path: /ws/documents/{doc_id}
+  auth: none — join requires link_policy to grant "view"; a "state" frame
+    requires "edit" (services/auth.py::can, same gate as HTTP)
+  model: full-state last-write-wins (no CRDT/OT); the room keeps the latest
+    diagram in memory for instant late-joiner sync; durable persistence stays
+    explicit (Save → PUT /api/documents/{doc_id})
+  client_to_server: |
+    {"t": "hello", "name": str, "color": str, "clientId": str}
+        — a new hello evicts any prior socket with the same clientId (4001)
+    {"t": "state", "diagram": {"nodes": [...], "edges": [...]},
+     "pageId"?: str, "removedNodeIds"?: [...], "removedEdgeIds"?: [...]}
+        — ignored from view-only links; removals apply to the room state so
+          late joiners do not resurrect deleted objects
+    {"t": "meta", "name": str} — live board-name sync (edit-gated)
+    {"t": "cursor", "x": float, "y": float, "pageId"?: str}
+  server_to_client: |
+    {"t": "init", "diagram": {...} | null, "you": int, "may_edit": bool}
+    {"t": "presence", "users": [{"id", "name", "color", "kind"}, ...]}
+    {"t": "state", "diagram": {...}, "from": int, "pageId",
+     "removedNodeIds", "removedEdgeIds"} — to others only
+    {"t": "meta", "name": str} — to others only
+    {"t": "cursor", "id", "name", "color", "x", "y", "pageId"} — to others only
+    {"t": "bye", "id": int}
+    {"t": "comments", "comments": [...]}
+        — full list, pushed by the comments REST handlers after every mutation
+  close_codes: 4404 unknown/malformed doc id, 4403 legacy private board,
+    4001 evicted by a newer connection with the same clientId
+  frame_cap: 1,200,000 bytes (the 1MB diagram cap + envelope headroom);
+    oversized frames are dropped silently
+
+paths:
+  /api/documents:
+    post:
+      operationId: uploadDocument
+      tags: [documents]
+      summary: Upload an SVG file as a new board (multipart)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Created board metadata (link_policy is always "edit")
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocMeta" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+  /api/documents/new:
+    post:
+      operationId: createDocument
+      tags: [documents]
+      summary: JSON create — blank board, template instance, or AI diagram
+      description: >-
+        When no SVG is supplied but a diagram is, the server bakes a preview
+        SVG so GET /{doc_id}/export.svg is never blank before first open+save.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDocBody" }
+      responses:
+        "200":
+          description: Created board metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocMeta" }
+        "400": { $ref: "#/components/responses/Problem" }
+  /api/documents/import:
+    post:
+      operationId: importDocument
+      tags: [documents]
+      summary: Import a draw.io/diagrams.net file as a new editable board
+      description: >-
+        Accepts .drawio/.xml (plain or deflate+base64 mxfile; multi-page maps
+        to noddle pages). Mermaid .mmd is handled client-side via the AI
+        text→diagram path.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Created board metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocMeta" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}:
+    get:
+      operationId: getDocument
+      tags: [documents]
+      summary: Full board — sanitized SVG + optional diagram sidecar
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      responses:
+        "200":
+          description: The board; my_role tells the client to lock the UI
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentOut" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: saveDocument
+      tags: [documents]
+      summary: Save (last-write-wins) — records a coalesced version snapshot
+      description: >-
+        diagram semantics — omitted keeps the stored sidecar (legacy clients),
+        null clears it, an object replaces it after validation. SVG is
+        sanitized before storage. Restore is client-driven — PUT a fetched
+        version back through this same operation.
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveBody" }
+      responses:
+        "200":
+          description: Updated metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocMeta" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: renameDocument
+      tags: [documents]
+      summary: Rename — the only mutable metadata (no policy toggle exists)
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchDocBody" }
+      responses:
+        "200":
+          description: Updated metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocMeta" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/export.svg:
+    get:
+      operationId: exportSvg
+      tags: [documents]
+      summary: Download the board as SVG (server-rendered from the diagram
+        when the stored SVG predates preview-baking)
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      responses:
+        "200":
+          description: SVG attachment
+          content:
+            image/svg+xml:
+              schema: { type: string }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/versions:
+    get:
+      operationId: listVersions
+      tags: [documents]
+      summary: Version snapshot metadata, newest first (no payloads)
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      responses:
+        "200":
+          description: Snapshots (coalesced within 60s per author, capped at 50)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/VersionMeta" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/versions/{version_id}:
+    get:
+      operationId: getVersion
+      tags: [documents]
+      summary: One full snapshot (svg + diagram) for preview/restore
+      parameters:
+        - { $ref: "#/components/parameters/DocId" }
+        - name: version_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Full snapshot — restore is client-driven (PUT it back)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionSnapshot" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/comments:
+    get:
+      operationId: listComments
+      tags: [comments]
+      summary: All comments for a board (view-gated)
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      responses:
+        "200":
+          description: Full comment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CommentOut" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createComment
+      tags: [comments]
+      summary: Create a comment or reply (view-gated — anyone who can see the
+        board may discuss it; display identity travels in the payload)
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommentIn" }
+      responses:
+        "200":
+          description: Full comment list (LWW, like the collab protocol) —
+            also pushed to the live room as a comments frame
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CommentOut" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/comments/{comment_id}:
+    patch:
+      operationId: updateComment
+      tags: [comments]
+      summary: Edit body / resolve (edit-gated — no server-side author identity)
+      parameters:
+        - { $ref: "#/components/parameters/DocId" }
+        - { $ref: "#/components/parameters/CommentId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommentPatch" }
+      responses:
+        "200":
+          description: Full comment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CommentOut" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteComment
+      tags: [comments]
+      summary: Delete a comment (edit-gated)
+      parameters:
+        - { $ref: "#/components/parameters/DocId" }
+        - { $ref: "#/components/parameters/CommentId" }
+      responses:
+        "200":
+          description: Full comment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CommentOut" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/ai/test-key:
+    post:
+      operationId: testAiKey
+      tags: [ai]
+      summary: Prove a BYOK key/model/base works — always resolves {ok, message}
+      security: [{ byokKey: [] }]
+      responses:
+        "200":
+          description: ok false means the key failed; only malformed headers 400
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, message]
+                properties:
+                  ok: { type: boolean }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+  /api/ai/image-to-svg:
+    post:
+      operationId: imageToSvg
+      tags: [ai]
+      summary: Synchronous image→SVG conversion (compat path; product flow is
+        the job queue)
+      security: [{ byokKey: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                prompt: { type: string }
+      responses:
+        "200":
+          description: SVG produced by the model (sanitized again on save)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SvgOut" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/AIBadOutput" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /api/ai/jobs/image-to-svg:
+    post:
+      operationId: submitImageJob
+      tags: [ai]
+      summary: Queue an image→board conversion (requires X-Client-Id)
+      security: [{ clientId: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                prompt: { type: string }
+      responses:
+        "202":
+          description: Job accepted; a finished job creates an ordinary
+            anonymous board
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiJob" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /api/ai/jobs:
+    get:
+      operationId: listImageJobs
+      tags: [ai]
+      summary: Job history for this X-Client-Id (empty list when absent)
+      security: [{ clientId: [] }]
+      responses:
+        "200":
+          description: Jobs, survives page reloads per anonymous client id
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AiJob" }
+  /api/ai/jobs/{job_id}:
+    get:
+      operationId: getImageJob
+      tags: [ai]
+      summary: One job (404 outside this client's bucket)
+      security: [{ clientId: [] }]
+      parameters: [{ $ref: "#/components/parameters/JobId" }]
+      responses:
+        "200":
+          description: The job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiJob" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteImageJob
+      tags: [ai]
+      summary: Remove a finished job from history
+      security: [{ clientId: [] }]
+      parameters: [{ $ref: "#/components/parameters/JobId" }]
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/ai/text-to-diagram:
+    post:
+      operationId: textToDiagram
+      tags: [ai]
+      summary: Text or Mermaid → diagram JSON (grid coords laid out client-side)
+      security: [{ byokKey: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TextToDiagramBody" }
+      responses:
+        "200":
+          description: Diagram JSON (nodes/edges) ready for the editor
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagram" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/AIBadOutput" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /api/ai/edit-diagram:
+    post:
+      operationId: editDiagram
+      tags: [ai]
+      summary: Live co-editing chat — mode "edit" returns a full updated
+        diagram (client 3-way merges it), mode "ask" never mutates
+      security: [{ byokKey: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EditDiagramBody" }
+      responses:
+        "200":
+          description: nodes/edges are null when nothing should be applied
+            (pure question, or mode "ask")
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EditDiagramOut" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/AIBadOutput" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /api/config:
+    get:
+      operationId: getConfig
+      tags: [system]
+      summary: Frontend feature flags — drives the AI backend picker
+      responses:
+        "200":
+          description: pool_ai covers Databricks OR FreePool availability
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Config" }
+  /api/health:
+    get:
+      operationId: getHealth
+      tags: [system]
+      summary: Liveness only — NEVER touches the DB (health is not readiness)
+      responses:
+        "200":
+          description: Alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status: { type: string }
+                  version: { type: string }
+
+components:
+  securitySchemes:
+    # Anonymous product — these are NOT credentials the server stores. They
+    # are declared so per-request identity-adjacent headers are contract
+    # knowledge, not tribal knowledge. Companion headers: X-AI-Provider
+    # (claude|openai|gemini|openrouter|custom), X-AI-Model, X-AI-Base
+    # (required when provider is custom), X-Turnstile-Token (when the
+    # operator enables Turnstile on the FreePool).
+    byokKey:
+      type: apiKey
+      in: header
+      name: X-AI-Key
+      description: The caller's own AI provider key — proxied per-request,
+        never stored, never logged. Absent ⇒ server pool fallback chain
+        (Databricks pool → FreePool → 503).
+    clientId:
+      type: apiKey
+      in: header
+      name: X-Client-Id
+      description: Opaque UUID minted once into localStorage — buckets AI job
+        history for an anonymous browser. Not a secret.
+  parameters:
+    DocId:
+      name: doc_id
+      in: path
+      required: true
+      description: 12-hex document id (uuid4().hex[:12]) — validated
+        ^[0-9a-f]{12}$ before any lookup
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{12}$"
+    CommentId:
+      name: comment_id
+      in: path
+      required: true
+      schema: { type: string }
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Problem:
+      description: Error — detail carries the verbatim message from
+        business-spec.yaml#errors
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    AIBadOutput:
+      description: The model produced no usable result — raw model text is
+        included for debugging
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [detail]
+            properties:
+              detail:
+                type: object
+                required: [message]
+                properties:
+                  message: { type: string }
+                  raw: { type: [string, "null"] }
+  schemas:
+    Problem:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+    DocMeta:
+      type: object
+      required: [id, name, created_at, updated_at, link_policy]
+      properties:
+        id: { type: string, pattern: "^[0-9a-f]{12}$" }
+        name: { type: string }
+        created_at: { type: number }
+        updated_at: { type: number }
+        link_policy:
+          type: string
+          enum: [edit, view, private]
+          description: '"edit" for every board the API creates; "view" and
+            "private" appear only on legacy rows (see
+            business-spec.yaml#link_policy)'
+    DocumentOut:
+      type: object
+      required: [meta, svg]
+      properties:
+        meta: { $ref: "#/components/schemas/DocMeta" }
+        svg:
+          type: string
+          description: Already sanitized — sanitization happens before storage
+        diagram:
+          oneOf:
+            - { $ref: "#/components/schemas/Diagram" }
+            - { $ref: "#/components/schemas/PagedDiagram" }
+            - { type: "null" }
+        my_role:
+          type: string
+          enum: [editor, viewer]
+          description: The caller's effective role so the frontend can lock
+            the UI without re-deriving the link policy
+    SaveBody:
+      type: object
+      required: [svg]
+      properties:
+        svg: { type: string }
+        diagram:
+          description: omitted → keep stored; null → clear; object → replace
+          oneOf:
+            - { $ref: "#/components/schemas/Diagram" }
+            - { $ref: "#/components/schemas/PagedDiagram" }
+            - { type: "null" }
+        author_name:
+          type: [string, "null"]
+          description: Client-side identity attributing the version snapshot
+            (trimmed to 40 chars)
+    CreateDocBody:
+      type: object
+      properties:
+        name: { type: [string, "null"] }
+        svg: { type: [string, "null"] }
+        diagram:
+          oneOf:
+            - { $ref: "#/components/schemas/Diagram" }
+            - { $ref: "#/components/schemas/PagedDiagram" }
+            - { type: "null" }
+    PatchDocBody:
+      type: object
+      properties:
+        name: { type: [string, "null"] }
+    VersionMeta:
+      type: object
+      required: [id, created_at, author_name]
+      properties:
+        id: { type: string }
+        created_at: { type: number }
+        author_name: { type: string }
+    VersionSnapshot:
+      type: object
+      required: [id, created_at, author_name, svg]
+      properties:
+        id: { type: string }
+        created_at: { type: number }
+        author_name: { type: string }
+        svg: { type: string }
+        diagram:
+          oneOf:
+            - { $ref: "#/components/schemas/Diagram" }
+            - { $ref: "#/components/schemas/PagedDiagram" }
+            - { type: "null" }
+    CommentIn:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string }
+        page_id: { type: [string, "null"] }
+        parent_id: { type: [string, "null"] }
+        anchor: { type: [object, "null"] }
+        guest_name:
+          type: [string, "null"]
+          description: Display name chosen client-side (localStorage identity)
+        guest_color: { type: [string, "null"] }
+    CommentPatch:
+      type: object
+      properties:
+        body: { type: [string, "null"] }
+        resolved: { type: [boolean, "null"] }
+    CommentOut:
+      type: object
+      required: [id, body, author_name, author_color, resolved, created_at, updated_at]
+      properties:
+        id: { type: string }
+        body: { type: string }
+        author_id: { type: [string, "null"] }
+        author_name: { type: string }
+        author_color: { type: string }
+        page_id: { type: [string, "null"] }
+        parent_id: { type: [string, "null"] }
+        anchor: { type: [object, "null"] }
+        resolved: { type: boolean }
+        created_at: { type: number }
+        updated_at: { type: number }
+    # ---- diagram entity model — MIRRORS web/src/editor-core/diagram/types.ts
+    # one-to-one. The guard test parses types.ts and fails when a field or
+    # NodeKind value exists on one side only. Edges never store endpoint
+    # coordinates (except attachment kind "free") — geometry derives from node
+    # positions at render, which is what makes edges sticky.
+    Diagram:
+      type: object
+      required: [nodes, edges]
+      description: Legacy single-page shape — the client loads it as "Page 1"
+      properties:
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/DiagramNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/DiagramEdge" }
+    PagedDiagram:
+      type: object
+      required: [pages]
+      description: Multi-page sidecar — serialized JSON capped at 1MB
+      properties:
+        pages:
+          type: array
+          items: { $ref: "#/components/schemas/DiagramPage" }
+    DiagramPage:
+      type: object
+      required: [id, name, nodes, edges]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/DiagramNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/DiagramEdge" }
+        hidden: { type: boolean }
+    Vec:
+      type: object
+      required: [x, y]
+      properties:
+        x: { type: number }
+        y: { type: number }
+    DiagramNode:
+      type: object
+      required: [id, kind, x, y, w, h, text, fill, stroke, strokeWidth]
+      properties:
+        id: { type: string }
+        kind: { $ref: "#/components/schemas/NodeKind" }
+        x: { type: number, description: Top-left corner (content coords) }
+        y: { type: number }
+        w: { type: number }
+        h: { type: number }
+        text: { type: string }
+        fill: { type: string }
+        stroke: { type: string }
+        strokeWidth: { type: number }
+        rotation:
+          type: number
+          description: Degrees clockwise around the node center (absent → 0);
+            rendering only — bbox, ports and routing stay axis-aligned
+        anim:
+          type: string
+          enum: [pulse, glow, breathe, wobble]
+        animSpeed:
+          type: number
+          enum: [0.5, 1, 2]
+        sketch:
+          type: boolean
+          description: Hand-drawn look (roughen filter + sketchy font)
+        fontSize: { type: number }
+        bold: { type: boolean }
+        italic: { type: boolean }
+        underline: { type: boolean }
+        textColor: { type: string }
+        textAlign:
+          type: string
+          enum: [left, center, right]
+        wrap:
+          type: boolean
+          description: Excel-style wrap — auto-break the label to the shape width
+        opacity: { type: number, minimum: 0, maximum: 1 }
+        cornerRadius: { type: number }
+        strokeDash:
+          type: string
+          enum: [solid, dashed, dotted]
+        iconKey:
+          type: string
+          description: For kind "icon" — registry glyph key
+        imageHref:
+          type: string
+          description: For kind "image" — MUST be a data URL (the sanitizer
+            strips remote hrefs)
+        groupId:
+          type: string
+          description: Nodes sharing a groupId select/drag as one unit (flat,
+            no nesting)
+        z:
+          type: number
+          description: Unified paint order across nodes AND edges (higher →
+            on top); absent → legacy two-pass paint order
+    NodeKind:
+      type: string
+      enum: [rect, rounded, ellipse, diamond, text, process, terminator,
+             document, parallelogram, cylinder, hexagon, manualInput, delay,
+             display, card, internalStorage, note, sticky, actor, triangle,
+             pentagon, star, cross, cloud, callout, trapezoid, octagon,
+             semicircle, ring, shield, lightning, heart, banner,
+             multiDocument, storedData, queue, loopLimit, merge, offPage,
+             arrowRight, arrowLeft, arrowDouble, chevron, umlClass, package,
+             component, icon, image]
+    Attachment:
+      description: How an edge endpoint attaches — port (fixed relative point),
+        floating (border point computed toward the far end), or free
+        (absolute content point)
+      oneOf:
+        - { $ref: "#/components/schemas/PortAttachment" }
+        - { $ref: "#/components/schemas/FloatingAttachment" }
+        - { $ref: "#/components/schemas/FreeAttachment" }
+      discriminator:
+        propertyName: kind
+        mapping:
+          port: "#/components/schemas/PortAttachment"
+          floating: "#/components/schemas/FloatingAttachment"
+          free: "#/components/schemas/FreeAttachment"
+    PortAttachment:
+      type: object
+      required: [kind, nodeId, rel]
+      properties:
+        kind: { type: string, enum: [port] }
+        nodeId: { type: string }
+        rel: { $ref: "#/components/schemas/Vec" }
+    FloatingAttachment:
+      type: object
+      required: [kind, nodeId]
+      properties:
+        kind: { type: string, enum: [floating] }
+        nodeId: { type: string }
+    FreeAttachment:
+      type: object
+      required: [kind, point]
+      properties:
+        kind: { type: string, enum: [free] }
+        point: { $ref: "#/components/schemas/Vec" }
+    EdgeLabelBlock:
+      type: object
+      required: [id, t, text]
+      properties:
+        id: { type: string }
+        t:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Arc-length fraction along the connector
+        text: { type: string }
+    DiagramEdge:
+      type: object
+      required: [id, source, target, routing, stroke, strokeWidth, endArrow,
+                 startArrow, animated]
+      properties:
+        id: { type: string }
+        source: { $ref: "#/components/schemas/Attachment" }
+        target: { $ref: "#/components/schemas/Attachment" }
+        routing:
+          type: string
+          enum: [straight, elbow]
+        stroke: { type: string }
+        strokeWidth: { type: number }
+        endArrow:
+          type: boolean
+          description: Legacy boolean — absent endHead falls back to "arrow"
+            when true, "none" when false
+        startArrow: { type: boolean }
+        animated: { type: boolean }
+        endHead:
+          type: string
+          enum: [none, arrow, triangle, circle, diamond]
+        startHead:
+          type: string
+          enum: [none, arrow, triangle, circle, diamond]
+        dash:
+          type: string
+          enum: [solid, dashed, dotted]
+          description: Static dash pattern, independent of the animated flow
+        label:
+          type: string
+          description: Legacy single midpoint label (kept for back-compat)
+        labels:
+          type: array
+          items: { $ref: "#/components/schemas/EdgeLabelBlock" }
+          description: Multi-label text blocks along the line — user content,
+            an AI edit must never drop them
+        flowStyle:
+          type: string
+          enum: [dash, dots, beam, pulse]
+        flowSpeed:
+          type: number
+          description: Continuous multiplier (UI slider maps value/50; legacy
+            0.5|1|2 remain valid)
+        flowIntensity:
+          type: string
+          enum: [subtle, normal, strong]
+        waypoints:
+          type: array
+          items: { $ref: "#/components/schemas/Vec" }
+          description: User-owned elbow corners; absent → the auto router
+            decides. OMITTED on AI-created/rerouted edges.
+        z: { type: number }
+    # ---- AI wire shapes ----------------------------------------------------
+    SvgOut:
+      type: object
+      required: [svg]
+      properties:
+        svg: { type: string }
+    TextToDiagramBody:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+        format:
+          type: string
+          enum: [text, mermaid]
+          default: text
+    EditDiagramBody:
+      type: object
+      required: [instruction, diagram]
+      properties:
+        instruction: { type: string }
+        diagram:
+          $ref: "#/components/schemas/Diagram"
+          description: The CURRENT board — always sent fresh, never a stale
+            snapshot
+        history:
+          type: array
+          default: []
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content: { type: string }
+        mode:
+          type: string
+          enum: [edit, ask]
+          default: edit
+          description: '"edit" = live co-editing (full updated diagram back,
+            or null for a pure question); "ask" = consultant — the diagram is
+            context only, the board is never mutated'
+        image:
+          type: [string, "null"]
+          description: Optional reference image as a
+            data:image/(png|jpeg|webp);base64 URL, capped at ~1.5MB binary
+        model:
+          type: [string, "null"]
+          description: Databricks serving-endpoint override for this chat
+            session (pool mode only; whitelisted server-side). Read from the
+            raw body, not the Pydantic model — kept here so the wire shape is
+            complete.
+    EditDiagramOut:
+      type: object
+      required: [message, nodes, edges]
+      properties:
+        message: { type: string }
+        nodes:
+          description: null when nothing should be applied (pure question or
+            mode "ask") — the client checks for null and skips the 3-way merge
+          oneOf:
+            - type: array
+              items: { $ref: "#/components/schemas/DiagramNode" }
+            - type: "null"
+        edges:
+          oneOf:
+            - type: array
+              items: { $ref: "#/components/schemas/DiagramEdge" }
+            - type: "null"
+        usage: { type: [object, "null"] }
+    AiJob:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        status:
+          type: string
+          enum: [queued, processing, done, error]
+        user_id:
+          type: string
+          description: The anonymous X-Client-Id bucket
+        name: { type: string }
+        prompt: { type: string }
+        doc_id:
+          type: string
+          description: The board a finished job created (empty until done)
+        error: { type: string }
+        created_at: { type: number }
+        updated_at: { type: number }
+    Config:
+      type: object
+      required: [pool_ai, turnstile_site_key]
+      properties:
+        pool_ai:
+          type: boolean
+          description: True when the Databricks pool OR the FreePool is
+            configured — drives the frontend backend picker
+        turnstile_site_key: { type: [string, "null"] }

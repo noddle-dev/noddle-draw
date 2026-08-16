@@ -1,0 +1,557 @@
+# yaml-language-server: $schema=./schemas/architecture.schema.json
+#
+# Architecture contract for noddle draw — layers, file ownership, persistence,
+# operations, decisions. Recorded from the repo as it stands (contract-first
+# adoption, 2026-08-16). The ADRs below migrate the standing "Hard rules" from
+# CLAUDE.md into decision records with rationale; CLAUDE.md points here.
+#
+# PUBLIC MIT REPO: nothing private (credentials, other Noddle products'
+# internals, customer data) may enter this file or this repo.
+meta:
+  name: noddle draw
+  version: "1.0"
+  style: >-
+    clean-architecture monolith — FastAPI (api → services → domain, with
+    infrastructure adapters behind domain ports) serving a built React/Vite
+    SPA same-origin from one container; pure-TS editor core inside the SPA
+  deployment: >-
+    Railway (single web service + optional Postgres), image also published to
+    GHCR for self-hosters; docker compose for local full-stack
+  related_artifacts:
+    - ./business-spec.yaml
+    - ./openapi.yaml
+
+principles:
+  - id: P-01
+    rule: >-
+      Dependency rule: api → services → domain. infrastructure implements the
+      domain ports (domain/repository.py); domain imports nothing outward.
+      create_app() in app/main.py is the only composition root — the only
+      place adapters are picked and services are wired into app.state.*.
+  - id: P-02
+    rule: >-
+      Never crash at boot. DATABASE_URL set but unreachable → file adapters
+      with a warning; missing AI config → 503 at the endpoint; missing S3 →
+      log shipping silently stays local. Every env var is optional.
+  - id: P-03
+    rule: >-
+      Sanitize before store: ALL SVG passes security/svg_sanitizer.py before
+      persistence, so reads are already clean; untrusted strings are esc()'d
+      before touching innerHTML on the client.
+  - id: P-04
+    rule: >-
+      Single instance only: collab rooms, FreePool counters and the AI job
+      worker set are in-memory — never scale replicas.
+  - id: P-05
+    rule: >-
+      Anonymous-only authorization: every gate goes through
+      services/auth.py::can(action, meta) on the board's link_policy. No
+      route reads an identity; there is nothing else to read.
+  - id: P-06
+    rule: >-
+      English only, public repo: code, comments, UI strings, commits and docs
+      are English; no hardcoded locales in date/number formatting; no
+      credentials or private Noddle internals ever land here.
+  - id: P-07
+    rule: >-
+      web/src/editor-core is pure TypeScript (no React, no DOM globals);
+      features/* never import another feature's internals — cross-feature
+      communication goes through the Zustand stores in web/src/state.
+
+ownership:
+  # Exactly one owner per file. ARCHITECT owns anything two other owners must
+  # agree on; an agent that finds the contract wrong REPORTS it, never edits.
+  - file: contracts/business-spec.yaml
+    owner: ARCHITECT
+    role: actors, link-policy matrix, flows, error copy, acceptance criteria
+  - file: contracts/openapi.yaml
+    owner: ARCHITECT
+    role: HTTP surface, diagram entity model, WS protocol note
+  - file: contracts/architecture.yaml
+    owner: ARCHITECT
+    role: layers, ownership, persistence, decisions
+  - file: tests/test_spec.py
+    owner: ARCHITECT
+    role: the guards that make this contract binding (canonical copy; run in
+      CI through backend/tests/test_contract_spec.py)
+  - file: backend/tests/test_contract_spec.py
+    owner: ARCHITECT
+    role: CI entry point that executes tests/test_spec.py inside the backend
+      test run
+  - file: backend/app/main.py
+    owner: ARCHITECT
+    role: composition root — adapter choice, CORS/frame headers, SPA routes
+  - file: backend/app/config.py
+    owner: ARCHITECT
+    role: Settings (all-optional env), .env loader
+  - file: backend/app/services/auth.py
+    owner: ARCHITECT
+    role: the whole permission model (GUEST principal + can())
+  - file: backend/app/domain/ids.py
+    owner: AGENT-DOMAIN
+    role: 12-hex id minting + validation (traversal/IDOR guard)
+  - file: backend/app/domain/models.py
+    owner: AGENT-DOMAIN
+    role: Document/DocumentMeta/DocumentVersion/Comment dataclasses
+  - file: backend/app/domain/repository.py
+    owner: AGENT-DOMAIN
+    role: persistence ports (Protocols) the adapters implement
+  - file: backend/app/services/documents.py
+    owner: AGENT-DOMAIN
+    role: sanitize-before-store, diagram validation, version coalescing rules
+  - file: backend/app/services/comments.py
+    owner: AGENT-DOMAIN
+    role: comment thread rules
+  - file: backend/app/services/ai.py
+    owner: AGENT-DOMAIN
+    role: prompt contracts, provider adapters, _normalize_full_diagram
+      (must round-trip every types.ts field)
+  - file: backend/app/services/ai_jobs.py
+    owner: AGENT-DOMAIN
+    role: background image→board job queue (per-client history, orphan healing)
+  - file: backend/app/services/diagram_render.py
+    owner: AGENT-DOMAIN
+    role: server-side diagram→SVG preview baking
+  - file: backend/app/services/drawio.py
+    owner: AGENT-DOMAIN
+    role: stdlib-only draw.io importer (all three mxfile shapes)
+  - file: backend/app/services/pool.py
+    owner: AGENT-ADAPTER
+    role: FreePool — shared OpenRouter free tier behind per-IP/daily/Turnstile
+      guards
+  - file: backend/app/services/audit.py
+    owner: AGENT-ADAPTER
+    role: append-only ops audit log (file or Pg-backed)
+  - file: backend/app/services/object_storage.py
+    owner: AGENT-ADAPTER
+    role: S3-compatible log-segment shipping (optional)
+  - file: backend/app/services/log_rotation.py
+    owner: AGENT-ADAPTER
+    role: local log segment rotation feeding object storage
+  - file: backend/app/infrastructure/file_repository.py
+    owner: AGENT-ADAPTER
+    role: file adapter (documents/versions/comments under backend/storage)
+  - file: backend/app/infrastructure/pg_repository.py
+    owner: AGENT-ADAPTER
+    role: Postgres adapter + idempotent schema bootstrap
+  - file: backend/app/infrastructure/pg_ledgers.py
+    owner: AGENT-ADAPTER
+    role: DB-backed ledgers — PgAuditStore + PgAIJobStore
+  - file: backend/app/infrastructure/atomic.py
+    owner: AGENT-ADAPTER
+    role: atomic_write_text — every file write goes through it
+  - file: backend/app/security/svg_sanitizer.py
+    owner: AGENT-ADAPTER
+    role: hardened SVG sanitizer (defusedxml; strips scripts/handlers/remote refs)
+  - file: backend/app/api/documents.py
+    owner: AGENT-API
+    role: board CRUD/export/versions routes, link-policy guards
+  - file: backend/app/api/comments.py
+    owner: AGENT-API
+    role: comment routes (view to discuss, edit to mutate) + room push
+  - file: backend/app/api/ai.py
+    owner: AGENT-API
+    role: AI routes, X-AI-* header parsing, backend fallback chain
+  - file: backend/app/api/collab.py
+    owner: AGENT-API
+    role: WebSocket rooms — its docstring IS the wire protocol spec
+  - file: backend/app/api/schemas.py
+    owner: AGENT-API
+    role: document DTOs mirroring the contract's component schemas
+  - file: backend/app/api/ai_schemas.py
+    owner: AGENT-API
+    role: AI DTOs (EditDiagramBody mode enum, chat-image validation)
+  - file: mcp/noddle_mcp.py
+    owner: AGENT-API
+    role: stdlib MCP server — thin stdio wrapper over the REST API, no tokens
+  - file: web/src/editor-core/diagram/types.ts
+    owner: ARCHITECT
+    role: the diagram entity model — mirrored one-to-one by
+      contracts/openapi.yaml and round-tripped by _normalize_full_diagram
+  - file: web/src/editor-core/index.ts
+    owner: AGENT-FE
+    role: pure-TS editor core barrel (selection/transform/camera/history/serialize)
+  - file: web/src/state/editorStore.ts
+    owner: AGENT-FE
+    role: SVG/DOM layer — docId, camera, tool, dirty/status, live refs
+  - file: web/src/state/diagramStore.ts
+    owner: AGENT-FE
+    role: normalized nodes/edges for the ACTIVE page; edge geometry is never
+      stored, always derived
+  - file: web/src/state/pagesStore.ts
+    owner: AGENT-FE
+    role: page tabs; inactive pages cached as plain {nodes,edges}
+  - file: web/src/state/collabStore.ts
+    owner: AGENT-FE
+    role: WS client, localStorage identity, remote-apply pausing
+  - file: web/src/state/diagramHistory.ts
+    owner: AGENT-FE
+    role: per-object diff undo/redo (never board snapshots on a live board)
+  - file: web/src/shared/api
+    owner: AGENT-FE
+    role: the only place the frontend talks HTTP (BYOK/localStorage helpers)
+  - file: Dockerfile
+    owner: ARCHITECT
+    role: single-container build (SPA baked into the backend image)
+  - file: docker-compose.yml
+    owner: ARCHITECT
+    role: local topology (app + postgres:16)
+  - file: .github/workflows/deploy.yml
+    owner: ARCHITECT
+    role: CI gate (backend pytest + web typecheck/build) then Railway deploy
+  - file: railway.env.map
+    owner: ARCHITECT
+    role: declarative Railway variable manifest for scripts/railway-sync-env.sh
+
+domain_model:
+  entities:
+    - name: DocumentMeta
+      invariants:
+        - id matches ^[0-9a-f]{12}$ (uuid4().hex[:12])
+        - link_policy is edit | view | private; every API-created board is edit
+        - owner_id is legacy-only (reads old rows) and grants nothing
+    - name: Document
+      invariants:
+        - svg is stored ALREADY sanitized
+        - diagram sidecar is pages[{id,name,nodes,edges}] or legacy
+          {nodes,edges}, at most 1MB of JSON
+    - name: DocumentVersion
+      invariants:
+        - one snapshot per save, coalesced within 60s for the same author_name
+        - at most 50 versions per document (oldest dropped)
+    - name: Comment
+      invariants:
+        - author identity is client-supplied display data, never authorization
+        - every mutation returns (and broadcasts) the FULL comment list
+
+persistence:
+  mode: >-
+    Dual-adapter behind domain ports — Postgres (psycopg v3 pool, plain SQL,
+    no ORM) when DATABASE_URL is set and reachable, else plain files under
+    backend/storage/ written via atomic_write_text. Schema bootstraps
+    idempotently at startup (CREATE TABLE IF NOT EXISTS); no migration tool.
+  owned_tables: [documents, comments, versions, audit_log, ai_jobs]
+  read_only_tables: []
+  legacy_tables: >-
+    tables from the retired accounts build are left untouched but no longer
+    created
+  concurrency: >-
+    None — last write wins by design, at both the HTTP layer (PUT overwrite)
+    and the collab layer (full-state frames). No optimistic locking.
+  blob_store: >-
+    Optional S3-compatible bucket (services/object_storage.py) receives
+    rotated log segments only — board data never leaves the DB/files.
+
+runtime:
+  diagram: |
+    browser (React SPA, editor-core pure TS, BYOK key in localStorage)
+       │  same-origin /api + /ws (SPA is served by the backend)
+       ▼
+    FastAPI app ──► services ──► domain ports
+       │                            ├─► Postgres (DATABASE_URL set + reachable)
+       │                            └─► files under backend/storage/ (fallback)
+       ├──► RoomManager (in-memory collab rooms — single instance!)
+       ├──► AIService ──► BYOK provider (per-request X-AI-* headers)
+       │        └─ no key → Databricks pool → FreePool (OpenRouter) → 503
+       └──► ObjectStorage (optional, log segments only)
+    mcp/noddle_mcp.py (stdio) ──► the same REST API
+  local: >-
+    Backend — python3 -m venv .venv, pip install -r backend/requirements.txt,
+    cd backend && uvicorn main:app --reload --port 8000. Frontend — cd web &&
+    npm run dev (:5173, proxies /api → :8000). Full stack — docker compose up
+    --build (:8000). Tests run from the repo root.
+  spa_deep_links: >-
+    /d/{id}, /embed/{id} and /generate are enumerated in app/main.py to serve
+    the SPA shell — a new client route must be added there or a reload 404s.
+
+deploy:
+  policy: >-
+    GitHub Actions (.github/workflows/deploy.yml) gates main: backend pytest +
+    web typecheck/build must pass, then Railway deploys. GHCR image published
+    for self-hosters (ghcr.yml). Railway variables are declarative —
+    railway.env.map + scripts/railway-sync-env.sh, never ad-hoc.
+  agent_may_deploy: false
+  paths:
+    - name: production (draw.noddle.dev)
+      who: pipeline
+      preconditions:
+        - python -m pytest backend/tests -q is green
+        - cd web && npm run typecheck && npm run build passes
+      steps:
+        - merge to main
+        - deploy.yml runs the gates, then triggers the Railway deploy
+      follow_up:
+        - verify GET /api/health returns status ok
+    - name: env var change
+      who: human
+      preconditions: [the key exists in railway.env.map]
+      steps:
+        - scripts/railway-sync-env.sh (dry-run first)
+      follow_up:
+        - restart picks up server env; no client rebuild needed (the SPA has
+          no baked env — /api/config is runtime)
+
+commands:
+  test: python -m pytest backend/tests -q
+  test_one: python -m pytest backend/tests/test_authz.py -q
+  test_pg: PG_TEST_DSN=postgres://... python -m pytest backend/tests -q
+  typecheck: cd web && npm run typecheck
+  build: cd web && npm run build
+  run_backend: cd backend && uvicorn main:app --reload --port 8000
+  run_frontend: cd web && npm run dev
+  stack: docker compose up --build
+  contract_audit: python3 ~/.claude/skills/contract-first/scripts/contract_audit.py .
+  lint: >-
+    none — no Python linter/formatter config is checked in (match surrounding
+    style); npm run typecheck is the only frontend gate
+
+config:
+  # Every variable is OPTIONAL — zero-config still runs (file storage, AI off).
+  # .env.example documents the self-hoster subset; this list is exhaustive.
+  NODDLE_PORT: docker compose host port (default 8000)
+  DATABASE_URL: Postgres persistence; absent/unreachable → file storage under backend/storage/
+  NODDLE_ALLOWED_ORIGINS: CORS allowlist for dev tooling (prod is same-origin)
+  PLAUSIBLE_DOMAIN: opt-in cookieless analytics — injects the snippet into the SPA shell
+  PLAUSIBLE_SRC: script host override for self-hosted Plausible
+  DATABRICKS_HOST: shared AI pool (operator-sponsored), with DATABRICKS_TOKEN
+  DATABRICKS_TOKEN: shared AI pool credential
+  DATABRICKS_CONFIG_PROFILE: alternative pool auth (profile-based)
+  DATABRICKS_CLAUDE_ENDPOINT: serving endpoint override for the pool
+  OPENROUTER_POOL_KEY: FreePool — zero-cost shared tier on OpenRouter free models
+  POOL_MODEL: FreePool model fallback chain override (comma-separated, max 3)
+  POOL_RPM_PER_IP: FreePool per-IP per-minute cap (default 3)
+  POOL_RPD_PER_IP: FreePool per-IP per-day cap (default 10)
+  POOL_DAILY_BUDGET: FreePool global daily budget (default 800)
+  TURNSTILE_SECRET: enables Cloudflare Turnstile on FreePool requests
+  TURNSTILE_SITE_KEY: surfaced to the frontend via /api/config
+  S3_ENDPOINT_URL: optional S3/R2 log shipping (with S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_REGION)
+  kill_switches:
+    ai: unset all pool vars and users without a BYOK key get 503 — the board
+      itself keeps working
+    postgres: unset DATABASE_URL to fall back to file storage
+
+blockers: []
+
+decisions:
+  # Standing rules from CLAUDE.md recorded as ADRs (adoption date 2026-08-16;
+  # the choices themselves predate this file). CLAUDE.md keeps the short form
+  # and points here.
+  - id: ADR-001
+    title: Anonymous-only access — the board URL is the capability
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      No users, sessions, teams or billing. services/auth.py is a frozen GUEST
+      principal plus can(action, meta): link_policy "edit" ⇒ view+edit,
+      "view" ⇒ view, anything else (legacy "private") ⇒ denied. No board
+      listing, no DELETE, no policy toggle.
+    rationale: >-
+      Excalidraw-model zero-friction sharing is the product; with no identity
+      there is nobody more trusted than anyone else holding the link, so any
+      listing/delete/toggle endpoint would be an unauthenticated foot-gun.
+    alternatives_rejected:
+      - Optional accounts (drags in sessions, ownership, billing — the
+        retired build proved the weight)
+      - Signed capability tokens per role (two URLs per board; breaks the
+        one-link mental model)
+    consequences:
+      - Losing the URL loses the board; recents live only in localStorage
+      - Legacy "private" rows stay dark forever
+      - owner_id remains on DocumentMeta as a read-only fossil
+    affects: [backend/app/services/auth.py, backend/app/api/documents.py]
+  - id: ADR-002
+    title: Sanitize SVG before storage, not on read
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      Every SVG passes security/svg_sanitizer.py in DocumentService before it
+      is persisted; reads and exports are served as stored.
+    rationale: >-
+      Stored-clean means every future read path (export, embed, version
+      restore, room sync) is safe by construction instead of by discipline.
+    alternatives_rejected:
+      - Sanitize on render (one forgotten path = stored XSS for every viewer)
+    consequences:
+      - The sanitizer must stay lossless for legitimate editor output
+      - Version snapshots and room states are clean by construction
+    affects: [backend/app/services/documents.py, backend/app/security/svg_sanitizer.py]
+  - id: ADR-003
+    title: Single-instance runtime — in-memory rooms and counters
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      Collab rooms (RoomManager), FreePool rate counters and the AI job
+      worker set are process-local. Deployment is exactly one replica.
+    rationale: >-
+      A Redis/pubsub layer for a self-hostable MIT app raises the operator
+      floor for a scale problem the product does not have.
+    alternatives_rejected:
+      - Redis-backed rooms and counters (new required dependency, against the
+        zero-config ethos)
+    consequences:
+      - Never scale replicas; a restart drops live cursors and resets pool
+        counters (acceptable — saves are explicit, the OpenRouter account is
+        the hard backstop)
+    affects: [backend/app/api/collab.py, backend/app/services/pool.py]
+  - id: ADR-004
+    title: Document ids are uuid4().hex[:12], validated everywhere
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      Ids are minted as uuid4().hex[:12] and every id-bearing route validates
+      ^[0-9a-f]{12}$ before touching storage (domain/ids.py).
+    rationale: >-
+      Short enough for a shareable URL, random enough to be unguessable as a
+      capability, and the strict shape check kills path traversal and
+      IDOR-shaped ids at the door.
+    alternatives_rejected:
+      - Full UUIDs (uglier links, no security gain at this scale)
+      - Sequential ids (enumerable — fatal when the URL is the capability)
+    consequences:
+      - The 12-hex pattern is load-bearing in routes, storage layout and the
+        SPA router — keep it
+    affects: [backend/app/domain/ids.py]
+  - id: ADR-005
+    title: English-only public repo, nothing private ever
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      All code, comments, UI strings, commits and docs are English; no
+      hardcoded locales in formatting; no credentials, customer data or other
+      Noddle products' internals may enter this repo.
+    rationale: >-
+      This is a public MIT repo with outside readers and contributors; the
+      rest of the Noddle workspace is private and must not leak into it.
+    alternatives_rejected:
+      - Bilingual comments (splits the audience, invites private-context leaks)
+    consequences:
+      - Reviews reject non-English strings and any private reference on sight
+    affects: [CONTRIBUTING.md]
+  - id: ADR-006
+    title: Embed-only framing
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      Only /embed/{id} is iframe-able (frame-ancestors *); every other HTML
+      response is locked to same-origin (frame-ancestors 'self' +
+      X-Frame-Options SAMEORIGIN).
+    rationale: >-
+      Boards should be embeddable in docs/wikis, but framing the editable app
+      invites clickjacking on an anonymous product with no second factor.
+    alternatives_rejected:
+      - Frame-able everywhere (clickjacking surface on the editor)
+      - No embedding (kills a legitimate read-only use case)
+    consequences:
+      - The SPA hides all chrome on /embed/*; new HTML routes inherit the
+        same-origin lockdown by default
+    affects: [backend/app/main.py]
+  - id: ADR-007
+    title: BYOK AI keys ride per-request headers and are never stored or logged
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      The browser keeps {provider,key,model,base} in localStorage and sends
+      X-AI-Provider/X-AI-Key/X-AI-Model/X-AI-Base per request; the server
+      proxies the call. Never log request headers around the AI routes; new
+      AI headers must be added to CORS allow_headers in main.py.
+    rationale: >-
+      An anonymous product has no vault to put a key in — storing keys would
+      create the only secret database in an otherwise account-less system.
+    alternatives_rejected:
+      - Server-side key storage (needs identity, encryption at rest, deletion
+        flows — the whole apparatus the product exists to avoid)
+    consequences:
+      - Keys re-enter on every device (acceptable; localStorage persists)
+      - Header logging is a standing prohibition, enforced by review
+    affects: [backend/app/api/ai.py, backend/app/main.py]
+  - id: ADR-008
+    title: The AI normalizer must round-trip every editor field
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      web/src/editor-core/diagram/types.ts is the authority on node/edge
+      fields; _normalize_full_diagram in services/ai.py must pass every
+      optional field through (validated), and contracts/openapi.yaml mirrors
+      the same list. A field added to types.ts without teaching the
+      normalizer fails the guard test.
+    rationale: >-
+      Stripping a field in normalization silently destroys user data on every
+      AI edit — exactly how edge label blocks and z paint order used to
+      vanish. That bug class must be structurally impossible to ship again.
+    alternatives_rejected:
+      - Passthrough-everything without validation (model output is untrusted;
+        oversized/dangerous values must still be clamped)
+    consequences:
+      - Adding an editor field is a three-place change (types.ts, normalizer,
+        openapi.yaml) enforced by tests/test_spec.py
+    affects: [backend/app/services/ai.py, web/src/editor-core/diagram/types.ts]
+  - id: ADR-009
+    title: AI edits 3-way merge onto the live board — never replace it
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      The client merges (snapshot the model saw) vs (model output) vs (live
+      board) and applies only objects the model actually changed; the server
+      returns the full normalized diagram or nodes/edges null for a pure
+      question or mode "ask".
+    rationale: >-
+      Other humans are editing the same board while the model works;
+      replace-the-board silently reverts their edits.
+    alternatives_rejected:
+      - Apply the model output wholesale (destroys concurrent human edits)
+      - Server-side merging (the server has no live board — rooms hold the
+        latest frame, not edit provenance)
+    consequences:
+      - Do not regress to replace-the-board; merge logic lives client-side
+    affects: [backend/app/services/ai.py, web/src/features/ai]
+  - id: ADR-010
+    title: Collaboration protocol is full-state last-write-wins, not CRDT
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      /ws/documents/{doc_id} exchanges whole-diagram state frames; the room
+      keeps the latest frame for late joiners; clientId dedups reconnects;
+      durable persistence stays explicit (Save → PUT). The docstring of
+      api/collab.py is the wire spec.
+    rationale: >-
+      Diagrams are small (≤1MB) and edits are coarse; full-state LWW is
+      debuggable, dependency-free and good enough — CRDT/OT buys conflict
+      granularity this editor does not need at the cost the project cannot
+      spend.
+    alternatives_rejected:
+      - CRDT (Yjs et al.) — a large dependency and data model rewrite
+      - Op-based diffs — ordering/rebase complexity without CRDT guarantees
+    consequences:
+      - Simultaneous edits can drop the slower writer's keystrokes between
+        frames (accepted; undo history is per-object diffs to compensate)
+      - The 1MB diagram cap doubles as the WS frame budget (1.2MB cap)
+    affects: [backend/app/api/collab.py]
+  - id: ADR-011
+    title: Postgres-or-files persistence behind ports — never crash at boot
+    status: decided
+    date: "2026-08-16"
+    choice: >-
+      _build_repositories tries Postgres when DATABASE_URL is set and
+      reachable (psycopg pool + idempotent CREATE TABLE IF NOT EXISTS), else
+      falls back to file adapters with a warning. Postgres mode also wires the
+      DB-backed ledgers (audit + AI jobs).
+    rationale: >-
+      Self-hosters must get a working app from `docker run` with zero config;
+      a DB outage should degrade durability guarantees, not availability.
+    alternatives_rejected:
+      - Require Postgres (kills the zero-config self-host story)
+      - Crash on unreachable DATABASE_URL (turns a config typo into an outage)
+    consequences:
+      - Two adapters to keep behaviorally equivalent (PG_TEST_DSN test path
+        exists for the Pg side)
+      - A silent fallback can mask a broken DATABASE_URL — the boot warning is
+        the only signal
+    affects: [backend/app/main.py, backend/app/infrastructure/pg_repository.py]
+
+rollout:
+  phase_1: >-
+    Done — anonymous boards, live collab, comments, versions, BYOK AI
+    co-editor with pool fallback, draw.io import, MCP server, Railway + GHCR.
+  phase_2: >-
+    Contract adoption (this bundle): guards run in CI via backend/tests;
+    keep openapi.yaml and types.ts moving in the same commit.

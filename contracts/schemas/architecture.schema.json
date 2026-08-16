@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "architecture",
+  "type": "object",
+  "required": [
+    "meta",
+    "principles",
+    "ownership",
+    "blockers",
+    "decisions"
+  ],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "style"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string"
+        },
+        "deployment": {
+          "type": "string"
+        },
+        "related_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "principles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "rule"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ownership": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "owner"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "domain_model": {
+      "type": "object"
+    },
+    "persistence": {
+      "type": "object"
+    },
+    "runtime": {
+      "type": "object"
+    },
+    "deploy": {
+      "type": "object",
+      "required": [
+        "agent_may_deploy"
+      ],
+      "properties": {
+        "agent_may_deploy": {
+          "const": false
+        }
+      }
+    },
+    "commands": {
+      "type": "object"
+    },
+    "config": {
+      "type": "object"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "severity",
+          "detail"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ADR-\\d+$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "decided",
+              "superseded"
+            ]
+          },
+          "affects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "decided"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "date",
+                "rationale",
+                "choice"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "open"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "resolution_criteria",
+                "default_if_unresolved"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "rollout": {
+      "type": "object"
+    }
+  }
+}

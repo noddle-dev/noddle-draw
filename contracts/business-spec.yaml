@@ -1,0 +1,328 @@
+# yaml-language-server: $schema=./schemas/business-spec.schema.json
+#
+# Domain contract for noddle draw — written against the code as it actually
+# behaves (contract-first adoption, 2026-08-16), not against an intended
+# redesign. Anything aspirational belongs in architecture.yaml#decisions.
+#
+# noddle draw is a PUBLIC, MIT-licensed, English-only repo. Nothing private
+# (credentials, other products' internals) may appear in this file.
+meta:
+  name: noddle draw
+  version: "1.0"
+  updated: "2026-08-16"
+  purpose: >-
+    Anonymous, open-source collaborative diagram board — anyone holding a
+    board's URL can view or edit it live, with an optional BYOK AI co-editor
+    whose key never leaves the browser except per-request.
+  related_artifacts:
+    - ./openapi.yaml
+    - ./architecture.yaml
+
+actors:
+  - role: guest
+    who: >-
+      Anyone holding a board URL. There are no accounts, sessions, teams or
+      billing — every caller is the single shared GUEST principal
+      (backend/app/services/auth.py). A display identity (name + color) is
+      auto-generated client-side into localStorage["noddle-user"] and rides
+      collab presence, comments and save attribution; it is cosmetic, never
+      authorization.
+    can: [create_board, view_board, edit_board, rename_board, export_svg,
+          list_versions, restore_version, comment, join_collab,
+          ai_edit, ai_ask, ai_image_to_board, import_drawio]
+  - role: operator
+    who: >-
+      The self-hoster. Acts only through environment variables (shared AI
+      pool, Postgres, S3 log shipping, analytics) — there is no admin API,
+      no admin UI and no privileged HTTP caller.
+    can: [configure_environment]
+
+identity:
+  source: >-
+    None. There is no server-side identity: authorization is the board URL
+    itself (Excalidraw semantics) — services/auth.py reduces every check to
+    can(action, meta.link_policy). No JWT, no cookie, no session.
+  membership_ssot: DocumentMeta.link_policy, per board
+  client_identity: >-
+    localStorage["noddle-user"] (display name + color, renameable in the
+    Share dialog) and localStorage["noddle.clientId"] (opaque UUID bucketing
+    AI job history via the X-Client-Id header). Neither is a credential.
+  recents: >-
+    Board discovery is client-side only — noddle.lastBoardId and
+    noddle.recentBoards in localStorage. The server deliberately has no
+    listing endpoint (link access is not discovery).
+  dev_fallback: none — local dev is identical to production (anonymous)
+
+# The permission model as data. `grants` per policy value must match
+# services/auth.py::can exactly — pinned by test_link_policy_matrix.
+link_policy:
+  values: [edit, view, private]
+  default_on_create: edit
+  matrix:
+    - policy: edit
+      grants: [view, edit]
+    - policy: view
+      grants: [view]
+    - policy: private
+      grants: []
+  notes:
+    - Every board created through the API is "edit" — there is no API to
+      change a policy, delete a board, or list boards.
+    - '"view" and "private" exist only on legacy rows written by the retired
+      accounts build; "private" boards stay dark forever.'
+    - DocumentMeta.owner_id survives only to read old rows; it grants nothing.
+
+# Small machine-checked enums shared with openapi.yaml and the code (the
+# link_policy values above are checked the same way). No orphan enums.
+enums:
+  ai_edit_mode: [edit, ask]
+
+state_machine:
+  # A board's only server-side state is its link_policy, fixed at creation.
+  initial: edit
+  terminal: []
+  invariants:
+    - A payload save must never touch link_policy (DocumentService.save
+      carries every meta field via dataclasses.replace).
+    - There is no transition between edit/view/private through the API —
+      no policy toggle, no delete, no listing.
+  transitions:
+    - action: create_board
+      role: guest
+      from: none
+      to: edit
+      sets: [id, name, link_policy, created_at, updated_at]
+
+flows:
+  open_or_mint:
+    trigger: A visitor opens / (or any unknown path).
+    steps:
+      - The SPA reopens localStorage noddle.lastBoardId when it is still
+        alive, else POSTs /api/documents/new for a fresh blank board and
+        history.replaceState()s to /d/{id}.
+      - A stale own lastBoardId heals silently by minting a new board; a
+        foreign dead /d/{id} link shows the notFound screen instead.
+  save_and_versions:
+    trigger: The editor saves (autosave debounce or explicit Save).
+    steps:
+      - PUT /api/documents/{doc_id} carries the rendered SVG plus the
+        editable diagram JSON sidecar and the client's author_name.
+      - The server sanitizes the SVG BEFORE storing it and structure-validates
+        the diagram (pages or nodes/edges, 1MB cap).
+      - Every save records a DocumentVersion. Rapid saves COALESCE into the
+        newest snapshot when they are under 60 seconds apart with the same
+        author_name; history is capped at 50 versions per board (oldest
+        dropped).
+      - Restore is CLIENT-driven — the frontend fetches one version and PUTs
+        it back as a normal save, so a restore flows through the same
+        sanitize/validate path and becomes the newest version. There is no
+        server-side restore endpoint.
+  live_collab:
+    trigger: Two browsers hold the same board URL.
+    steps:
+      - Each connects to /ws/documents/{doc_id} — no auth; join requires the
+        board's link_policy to grant "view", state broadcast requires "edit".
+      - The protocol is full-state last-write-wins — hello/state/cursor up;
+        init/presence/state/cursor/bye/comments down. No CRDT, no OT.
+      - clientId in hello dedups reconnects — a new hello evicts the prior
+        socket with the same clientId.
+      - The room keeps the latest diagram in memory so late joiners sync
+        instantly; durable persistence stays explicit (Save → PUT).
+      - Comment mutations over REST push the full comment list into the
+        room as a comments frame.
+  ai_draw:
+    trigger: A guest sends a chat instruction with mode "edit" (the default).
+    steps:
+      - The browser sends X-AI-Provider/X-AI-Key/X-AI-Model/X-AI-Base headers
+        from localStorage["noddle.aiKey"] — BYOK is per-request; the server
+        never stores or logs the key.
+      - No key → fallback chain — the shared Databricks pool when configured,
+        else the FreePool (OpenRouter free models behind per-IP limits, a
+        global daily budget and optional Turnstile), else 503.
+      - The model returns the FULL updated diagram, or diagram null for a
+        pure question; the server normalizes it (_normalize_full_diagram must
+        round-trip every editor field) and replies with nodes/edges or nulls.
+      - The CLIENT 3-way merges the result onto the live board — snapshot the
+        model saw vs its output vs the current board — so only objects the
+        model actually changed are applied and concurrent human edits survive.
+        Never replace-the-board.
+  ai_ask:
+    trigger: A guest sends a chat instruction with mode "ask".
+    steps:
+      - The diagram is context only — the board is never mutated; the answer
+        may be long-form (nodes/edges are always null in the response).
+  image_to_board:
+    trigger: A guest uploads a sketch/screenshot to convert into a board.
+    steps:
+      - POST /api/ai/jobs/image-to-svg (bucketed by X-Client-Id) returns 202
+        immediately; a worker pool converts uploads in parallel.
+      - A finished job creates an ordinary anonymous board; job history
+        survives page reloads per client id.
+  embed:
+    trigger: A third-party site iframes a board.
+    steps:
+      - Only /embed/{doc_id} is frame-able (frame-ancestors *); the SPA hides
+        all chrome there. Every other HTML response is locked to same-origin
+        framing.
+
+errors:
+  # Verbatim HTTPException messages raised by the code — pinned by
+  # test_error_copy_matches_code for the load-bearing ones.
+  - http: 404
+    when: board id is malformed or unknown
+    message: Document not found.
+    fe_behaviour: notFound screen (own stale recents heal by minting a new board)
+  - http: 403
+    when: viewing a legacy "private" board
+    message: You don't have permission to view this board.
+    fe_behaviour: notFound-style screen (do not reveal the board exists)
+  - http: 403
+    when: editing (PUT/PATCH/comment-mutation) through a "view" link
+    message: This board's link is view-only.
+    fe_behaviour: UI is already locked read-only via my_role; toast on race
+  - http: 404
+    when: version id unknown for this board
+    message: Version not found.
+    fe_behaviour: toast in the history panel
+  - http: 413
+    when: an uploaded/imported file exceeds 8MB
+    message: File is too large (8MB limit).
+    fe_behaviour: toast on the drop zone
+  - http: 400
+    when: importing a non-draw.io file
+    message: Format not supported yet — currently accepts draw.io files (.drawio/.xml).
+    fe_behaviour: toast on the import dialog
+  - http: 400
+    when: the diagram sidecar exceeds the size cap
+    message: Diagram is too large (1MB limit).
+    fe_behaviour: toast; the save is rejected
+  - http: 503
+    when: an AI call arrives with no BYOK key, no Databricks pool and no FreePool
+    message: No AI backend available — add your API key in AI settings, or configure the server pool.
+    fe_behaviour: chat panel shows the message with a link to AI settings
+  - http: 400
+    when: X-AI-Provider is not one of the supported providers
+    message: "Unknown AI provider — expected one of: claude, custom, gemini, openai, openrouter."
+    fe_behaviour: none — the settings UI only offers valid providers
+  - http: 400
+    when: provider "custom" is selected without X-AI-Base
+    message: Provider 'custom' needs X-AI-Base (an OpenAI-compatible base URL).
+    fe_behaviour: inline error in AI settings
+  - http: 415
+    when: an AI image upload is not png/jpeg/webp/gif
+    message: Only png/jpeg/webp/gif images are supported.
+    fe_behaviour: toast on the upload control
+  - http: 413
+    when: an AI image upload exceeds 8MB
+    message: Image is too large (max 8MB).
+    fe_behaviour: toast on the upload control
+  - http: 413
+    when: a chat reference image exceeds the data-URL cap (~1.5MB binary)
+    message: Attached image is too large (max ~1.5MB).
+    fe_behaviour: toast in the chat panel
+  - http: 400
+    when: a background job is submitted without X-Client-Id
+    message: Missing X-Client-Id header for job tracking.
+    fe_behaviour: none — the client always mints one
+  - http: 422
+    when: the AI model produced no usable result
+    message: AIBadOutput — detail carries {message, raw model text} for debugging
+    fe_behaviour: chat shows the message; raw is kept for a bug report
+  - http: 429
+    when: the FreePool per-IP or daily-budget guard trips
+    message: PoolLimited — actionable text produced by services/pool.py
+    fe_behaviour: chat suggests adding a BYOK key
+
+validation_rules:
+  - field: document.id
+    rule: minted as uuid4().hex[:12]; every id-bearing route validates
+      ^[0-9a-f]{12}$ before touching storage (domain/ids.py) — no traversal,
+      no IDOR-shaped ids
+  - field: document.svg
+    rule: sanitized by security/svg_sanitizer.py BEFORE storage — reads are
+      already clean; scripts/event handlers/foreignObject never persist
+  - field: document.diagram
+    rule: multi-page {pages:[{id,name,nodes,edges}]} or legacy {nodes,edges}
+      (loads as "Page 1"); serialized JSON must be at most 1MB
+  - field: upload.file
+    rule: at most 8MB (documents upload/import and AI image alike)
+  - field: ai.chat_image
+    rule: data:image/(png|jpeg|webp);base64 data URL, at most 2,100,000 chars
+      (~1.5MB binary) — no SVG (scriptable), no remote URLs (SSRF)
+  - field: save.author_name
+    rule: trimmed and truncated to 40 chars; attribution only, never identity
+
+idempotency:
+  - operation: saveDocument
+    key: >-
+      None — last write wins by design (no optimistic locking). Version
+      snapshots coalesce within 60s per author_name, so autosave retries do
+      not stack history entries.
+  - operation: collab state frames
+    key: full-state LWW — replaying a state frame is harmless; the newest
+      frame is the board.
+  - operation: websocket hello
+    key: clientId — a reconnect with the same clientId evicts the prior
+      socket instead of duplicating presence.
+
+copy:
+  # Strings that appear in more than one backend module (documents + comments
+  # routers) or that the frontend surfaces verbatim. Pinned by
+  # test_error_copy_matches_code.
+  not_found: Document not found.
+  view_denied: You don't have permission to view this board.
+  edit_view_only: This board's link is view-only.
+  ai_no_backend: No AI backend available — add your API key in AI settings, or configure the server pool.
+
+acceptance_criteria:
+  - id: AC-LINK-01
+    text: link_policy "edit" grants view+edit, "view" grants view only, and
+      any other value (legacy "private") denies everything — exactly the
+      matrix in this spec.
+    ref: link_policy.matrix
+  - id: AC-LINK-02
+    text: The API has no board-listing, board-delete or policy-toggle route —
+      the URL is the capability and link access is not discovery.
+    ref: link_policy.notes
+  - id: AC-ID-01
+    text: Document ids are uuid4().hex[:12] and every id is validated against
+      ^[0-9a-f]{12}$ before any lookup.
+    ref: validation_rules
+  - id: AC-SAN-01
+    text: SVG is sanitized BEFORE storage — a script-carrying SVG saved
+      through the API comes back with the script gone.
+    ref: validation_rules
+  - id: AC-VER-01
+    text: Version snapshots coalesce within 60 seconds for the same author
+      and history is capped at 50 versions per board.
+    ref: flows.save_and_versions
+  - id: AC-VER-02
+    text: Restore is client-driven — a version fetched and PUT back becomes
+      the newest version through the normal sanitize/validate save path.
+    ref: flows.save_and_versions
+  - id: AC-AI-01
+    text: The edit-diagram mode enum is exactly {edit, ask} in the spec, the
+      OpenAPI contract and EditDiagramBody; ask never returns nodes/edges.
+    ref: flows.ai_ask
+  - id: AC-AI-02
+    text: With no BYOK key, no Databricks pool and no FreePool configured,
+      AI endpoints return 503 with the exact ai_no_backend copy.
+    ref: flows.ai_draw
+  - id: AC-AI-03
+    text: _normalize_full_diagram round-trips EVERY optional field declared
+      on DiagramNode/DiagramEdge in web/src/editor-core/diagram/types.ts —
+      a field the normalizer does not know fails the build.
+    ref: flows.ai_draw
+  - id: AC-COLLAB-01
+    text: The collab room is full-state last-write-wins and a new hello with
+      the same clientId evicts the prior socket.
+    ref: flows.live_collab
+
+out_of_scope:
+  - Accounts, login, sessions, teams, billing — anonymous-only by design.
+  - Board listing/discovery API, board deletion, link-policy toggling.
+  - Server-side storage of AI keys (BYOK is per-request headers only).
+  - CRDT/OT merge for collaboration — the protocol is full-state LWW.
+  - Horizontal scaling — collab rooms and FreePool counters are in-memory;
+    the app is single-instance by design.
+  - Any locale beyond English (public OSS repo rule).
