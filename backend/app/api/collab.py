@@ -7,21 +7,35 @@ protocol is deliberately simple, full-state last-write-wins:
   client → server
     {"t": "hello",  "name": str, "color": str, "clientId": str}
                     # clientId (stable per browser) dedups reconnects: a new
-                    # hello evicts any prior connection with the same clientId.
-    {"t": "state",  "diagram": {"nodes": [...], "edges": [...]}}
-    {"t": "cursor", "x": float, "y": float}          # content coords
+                    # hello evicts any prior connection with the same
+                    # clientId (close code 4001).
+    {"t": "state",  "diagram": {"nodes": [...], "edges": [...]},
+                    "pageId"?: str, "removedNodeIds"?: [...],
+                    "removedEdgeIds"?: [...]}
+                    # edit-gated (ignored from view-only links); removals
+                    # apply to the room state so late joiners don't
+                    # resurrect deleted objects.
+    {"t": "meta",   "name": str}                     # live board-name sync
+    {"t": "cursor", "x": float, "y": float, "pageId"?: str}  # content coords
   server → clients
-    {"t": "init",     "diagram": {...} | null, "you": int}
-    {"t": "presence", "users": [{"id", "name", "color"}, ...]}
-    {"t": "state",    "diagram": {...}, "from": int}   # to others only
-    {"t": "cursor",   "id", "name", "color", "x", "y"} # to others only
+    {"t": "init",     "diagram": {...} | null, "you": int, "may_edit": bool}
+    {"t": "presence", "users": [{"id", "name", "color", "kind"}, ...]}
+    {"t": "state",    "diagram": {...}, "from": int, "pageId",
+                      "removedNodeIds", "removedEdgeIds"}    # to others only
+    {"t": "meta",     "name": str}                           # to others only
+    {"t": "cursor",   "id", "name", "color", "x", "y", "pageId"}  # to others
     {"t": "bye",      "id": int}
     {"t": "comments", "comments": [...]}  # full-state LWW, pushed by the
                                           # comments REST handlers after every
                                           # mutation (see push_to_room)
 
+Close codes: 4404 unknown/malformed doc id · 4403 legacy private board ·
+4001 evicted by a newer connection with the same clientId.
+
 The room keeps the latest diagram in memory so late joiners sync instantly;
 durable persistence stays explicit (the Save button → PUT /api/documents).
+This docstring is the wire-protocol spec — keep it in lockstep with
+``contracts/openapi.yaml#x-websocket-protocol`` on any change.
 """
 from __future__ import annotations
 
