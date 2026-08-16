@@ -46,3 +46,12 @@ export const CHAT_SUGGESTIONS = [
   "Tidy up the layout",
   "Add an end node",
 ];
+
+/** Ask-mode (consultant) starters — questions about the board, never edits.
+ * Kept the same count/length ballpark as CHAT_SUGGESTIONS so swapping the
+ * chip row on mode toggle doesn't change the composer height. */
+export const ASK_SUGGESTIONS = [
+  "Review this architecture",
+  "What is missing here?",
+  "Best practices for this flow?",
+];

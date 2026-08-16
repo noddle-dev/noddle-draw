@@ -18,7 +18,7 @@ import { getIdentity } from "../../state/collabStore";
 import { AiKeySettings } from "../ai/AiKeySettings";
 import { rollbackAiCheckpoint, useAiCheckpoints } from "./aiCheckpoints";
 import { askClaudeEdit } from "./claudeEdit";
-import { CHAT_SUGGESTIONS } from "./data";
+import { ASK_SUGGESTIONS, CHAT_SUGGESTIONS } from "./data";
 
 const WELCOME: ChatMessage = {
   who: "ai" as const,
@@ -286,7 +286,9 @@ export function ClaudeChat() {
       <div className="chat-foot">
         {/* Draw edits the board; Ask is a tech consultant (board = context
             only, never mutated) — so questions get real answers instead of
-            being forced through the editing contract. */}
+            being forced through the editing contract. The suggestion chips
+            SWAP per mode instead of unmounting, so toggling Draw/Ask never
+            reflows the composer. Doodle SVG icons, same as noddle-board. */}
         <div className="chat-mode" role="radiogroup" aria-label="Chat mode">
           <button
             className={`chat-mode-btn${chatMode === "edit" ? " active" : ""}`}
@@ -295,7 +297,11 @@ export function ClaudeChat() {
             title="Messages edit the board"
             onClick={() => setChatMode("edit")}
           >
-            ✏️ Draw
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3.8 20.3l1.1-4.5L16.2 4.4a2.1 2.1 0 0 1 3.1 3L8 18.9z" />
+              <path d="M13.8 6.6l3.2 3.2" />
+            </svg>
+            Draw
           </button>
           <button
             className={`chat-mode-btn${chatMode === "ask" ? " active" : ""}`}
@@ -304,16 +310,17 @@ export function ClaudeChat() {
             title="Ask questions / get advice — the board is never changed"
             onClick={() => setChatMode("ask")}
           >
-            💬 Ask
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4.6 5.6a1.8 1.8 0 0 1 1.8-1.7h11.3a1.8 1.8 0 0 1 1.8 1.8v7.6a1.8 1.8 0 0 1-1.9 1.7H10l-4.2 3.8.1-3.8h-.5a1.8 1.8 0 0 1-1.8-1.8z" />
+            </svg>
+            Ask
           </button>
         </div>
-        {chatMode === "edit" && (
-          <div className="chat-suggest">
-            {CHAT_SUGGESTIONS.map((s) => (
-              <button key={s} onClick={() => send(s)}>{s}</button>
-            ))}
-          </div>
-        )}
+        <div className="chat-suggest">
+          {(chatMode === "ask" ? ASK_SUGGESTIONS : CHAT_SUGGESTIONS).map((s) => (
+            <button key={s} onClick={() => send(s)}>{s}</button>
+          ))}
+        </div>
         {(image || imgErr) && (
           <div className="chat-attach-preview">
             {image && (
