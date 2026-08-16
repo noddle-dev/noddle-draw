@@ -33,6 +33,10 @@ import { panState } from "../../state/panState";
 import { beginEdgeLabelEdit } from "./edgeLabelEdit";
 
 const HIT_STROKE = 12;
+/** Edge-label ink — the editorial `ink` token (ADR-0004, mirrors
+ *  `backend/app/domain/editorial.py`). Edge labels have no per-edge colour
+ *  field, so this constant is the only place their colour can come from. */
+const LABEL_INK = "#2d3142";
 
 /** The head kinds that render a marker (i.e. everything but "none"). */
 export const ARROW_HEADS: Exclude<ArrowHead, "none">[] = [
@@ -349,10 +353,15 @@ function LabelChip({
     >
       {/* Excalidraw-style: a borderless canvas-colored halo that masks the
           line under the text — no chip outline. */}
+      {/* Label ink is the editorial `ink` token (ADR-0004). It used to be a
+          hardcoded #1a1d23, which is ΔE 12 away from the palette — far enough
+          to read as a foreign hue, and unreachable from board JSON since
+          EdgeLabelBlock carries no colour. Nodes already resolve their own
+          textColor; edge labels had no such escape hatch. */}
       <rect x={cx - chipW / 2} y={cy - chipH / 2} width={chipW} height={chipH} rx={4} ry={4}
         fill="#ffffff" />
       <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fontSize={fs}
-        fill="#1a1d23" style={{ userSelect: "none" }}>
+        fill={LABEL_INK} style={{ userSelect: "none" }}>
         {text}
       </text>
     </g>
