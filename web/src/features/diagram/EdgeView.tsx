@@ -33,7 +33,7 @@ import { panState } from "../../state/panState";
 import { beginEdgeLabelEdit } from "./edgeLabelEdit";
 
 const HIT_STROKE = 12;
-/** Edge-label ink — the editorial `ink` token (ADR-0004, mirrors
+/** Edge-label ink — the editorial `ink` token (ADR-0009, mirrors
  *  `backend/app/domain/editorial.py`). Edge labels have no per-edge colour
  *  field, so this constant is the only place their colour can come from. */
 const LABEL_INK = "#2d3142";
@@ -353,7 +353,7 @@ function LabelChip({
     >
       {/* Excalidraw-style: a borderless canvas-colored halo that masks the
           line under the text — no chip outline. */}
-      {/* Label ink is the editorial `ink` token (ADR-0004). It used to be a
+      {/* Label ink is the editorial `ink` token (ADR-0009). It used to be a
           hardcoded #1a1d23, which is ΔE 12 away from the palette — far enough
           to read as a foreign hue, and unreachable from board JSON since
           EdgeLabelBlock carries no colour. Nodes already resolve their own
