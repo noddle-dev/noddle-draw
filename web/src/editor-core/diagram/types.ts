@@ -112,6 +112,18 @@ export type TextAlign = "left" | "center" | "right";
 /** Static border dash pattern for a node's shape outline (absent → "solid"). */
 export type NodeStrokeDash = "solid" | "dashed" | "dotted";
 
+/**
+ * Label typeface, as a TOKEN rather than a font string.
+ *
+ * The editorial style (ADR-0009) reads typography as a hierarchy: a sans name,
+ * a monospace technical sublabel, a serif display title. Three roles, so three
+ * tokens — resolved to concrete stacks in ONE place
+ * (`features/diagram/typography.ts`). A raw `font-family` field would let the
+ * AI invent faces the export can't rasterize and would put the same stack in
+ * every saved board; a token keeps boards small and the stack swappable.
+ */
+export type NodeFontFamily = "sans" | "mono" | "serif";
+
 export interface DiagramNode {
   id: string;
   kind: NodeKind;
@@ -143,7 +155,16 @@ export interface DiagramNode {
   italic?: boolean;
   /** Underlined label (absent → false). */
   underline?: boolean;
-  /** Label color (absent → the default #1a1d23). */
+  /** Label typeface token (absent → "sans"). See NodeFontFamily. */
+  fontFamily?: NodeFontFamily;
+  /**
+   * Extra tracking in px (absent → 0). The editorial eyebrow/type-tag look is
+   * small uppercase text with open tracking; at 8px a 0.08em reference value is
+   * well under a pixel, so this is deliberately fractional and — like
+   * `strokeWidth` and `cornerRadius` — exempt from the 4px grid.
+   */
+  letterSpacing?: number;
+  /** Label color (absent → the editorial ink token). */
   textColor?: string;
   /** Label horizontal alignment (absent → "center"). */
   textAlign?: TextAlign;

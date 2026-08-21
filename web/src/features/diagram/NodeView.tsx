@@ -22,6 +22,7 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { useAppStore } from "../../state/appStore";
 import { panState } from "../../state/panState";
 import { beginNodeTextEdit } from "./nodeTextEdit";
+import { LABEL_INK, nodeFontStack } from "./typography";
 import { ConnectionPorts, type PreviewEdge } from "./ConnectionPorts";
 import { DirectionalArrows } from "./DirectionalArrows";
 import { shapeElement } from "./ShapePalette";
@@ -219,8 +220,9 @@ export function NodeView({
           fontWeight={node.bold ? 700 : undefined}
           fontStyle={node.italic ? "italic" : undefined}
           textDecoration={node.underline ? "underline" : undefined}
-          fill={node.textColor ?? "#1a1d23"}
-          fontFamily={node.sketch ? '"Comic Sans MS", "Segoe Print", "Bradley Hand", cursive' : undefined}
+          fill={node.textColor ?? LABEL_INK}
+          fontFamily={nodeFontStack(node)}
+          letterSpacing={node.letterSpacing || undefined}
           style={{ pointerEvents: "none", userSelect: "none" }}
         >
           {/* Multi-line labels: \n from the editor + auto word-wrap when
