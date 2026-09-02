@@ -63,6 +63,9 @@ export function NodeView({
   const onPointerDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     if (panState.spaceHeld) return; // Space-pan owns the gesture — hand drags the page
+    // Draw tool armed: the canvas draws the new shape — even over this node
+    // (Excalidraw semantics). Let the event bubble to the stage handler.
+    if (useEditorStore.getState().tool === "draw") return;
     e.stopPropagation();
     const d = useDiagramStore.getState();
     // Keep both nodes AND edges — mixed selections group/delete together;

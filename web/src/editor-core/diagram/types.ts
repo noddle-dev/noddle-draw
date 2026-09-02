@@ -51,6 +51,12 @@ export type NodeKind =
   | "lightning"
   | "heart"
   | "banner"
+  // open strokes (2026-09) — the figurative vocabulary AI drawings lacked
+  // (whiskers/limbs/tails used to be faked with filled rects). STROKE-ONLY:
+  // line = the box's TL→BR diagonal, curve = full-box arch ∩, curveDown = ∪.
+  | "line"
+  | "curve"
+  | "curveDown"
   // flowchart expansion (features/diagram/shapes/flowchart.tsx)
   | "multiDocument"
   | "storedData"

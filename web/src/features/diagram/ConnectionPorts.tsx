@@ -22,7 +22,7 @@ import { PORTS } from "./ports";
 
 /** Status-bar hint shown while the connect affordance is hovered. */
 const HOVER_HINT =
-  "Drag from a port or the border: release on a shape to connect, on empty canvas to create a connected shape.";
+  "Click or drag from a port/border: finish on a shape to connect, on empty canvas to create a connected shape (Esc cancels).";
 
 const ACCENT = "#2563eb";
 const HIT_R = 14;
@@ -128,9 +128,52 @@ export function ConnectionPorts({
           snapPort: tp,
         });
       };
-      const up = (ev: PointerEvent) => {
+      // Arrow TOOL stays armed after a draw (sticky — chain several arrows);
+      // Esc or the Select tool (1/V) disarms it.
+      //
+      // TWO gestures finish an arrow (Excalidraw parity):
+      //   • drag: press on the source, release on the target;
+      //   • click-click: a plain CLICK on the source arms follow mode — the
+      //     preview tracks the cursor — and the next click commits (Esc
+      //     cancels). The first sub-6px pointerup is what flips the mode.
+      let clickMode = false;
+      const cleanup = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointerdown", downFinish, true);
+        window.removeEventListener("keydown", onEsc, true);
+      };
+      const onEsc = (ev: KeyboardEvent) => {
+        if (ev.key !== "Escape") return;
+        onPreviewChange(null);
+        cleanup();
+      };
+      const downFinish = (ev: PointerEvent) => {
+        if (!clickMode || ev.button !== 0) return;
+        // Clicks OUTSIDE the canvas (toolbar, islands, panels) must keep
+        // working — cancel the pending arrow and let the UI click proceed.
+        const host = useEditorStore.getState().refs?.host;
+        if (!host || !host.contains(ev.target as Node)) {
+          onPreviewChange(null);
+          cleanup();
+          return;
+        }
+        // Swallow this press — without it the same click would also start a
+        // marquee / node-drag underneath the freshly finished arrow.
+        ev.preventDefault();
+        ev.stopPropagation();
+        finish(ev);
+      };
+      const up = (ev: PointerEvent) => {
+        if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 6 && !clickMode) {
+          clickMode = true; // click #1: keep the preview live, await click #2
+          return;
+        }
+        if (clickMode) return; // the finishing CLICK is handled on pointerdown
+        finish(ev);
+      };
+      const finish = (ev: PointerEvent) => {
+        cleanup();
         const p = screenToContent(content, ev.clientX, ev.clientY);
         const ds = useDiagramStore.getState();
         const hit = snapConnect(ds.nodes, p, node.id, magnetScale());
@@ -190,6 +233,9 @@ export function ConnectionPorts({
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
+      // Capture phase: the finishing click must beat the canvas/node handlers.
+      window.addEventListener("pointerdown", downFinish, true);
+      window.addEventListener("keydown", onEsc, true);
     };
 
   const startConnect = (rel: Vec) => (e: ReactPointerEvent) => beginConnect(rel, e);
@@ -224,15 +270,22 @@ export function ConnectionPorts({
     const near = Math.hypot(c.x - pt.x, c.y - pt.y) <= NEAR;
     return { pt, near };
   };
+  // Arrow TOOL: the WHOLE node is a connect source — any press starts an edge
+  // from the pressed point projected onto the perimeter (no border-band gate),
+  // exactly what the Simple island's "5" tool promises.
+  const arrowTool = () => useEditorStore.getState().tool === "arrow";
   const overlayMove = (e: ReactPointerEvent) => {
     const info = borderInfo(e);
-    setHoverPt(info?.near ? info.pt : null);
+    setHoverPt(info && (info.near || arrowTool()) ? info.pt : null);
     // Tell the user what the affordance does the moment it lights up.
-    if (info?.near) useEditorStore.getState().setStatus(HOVER_HINT);
+    if (info?.near || arrowTool()) useEditorStore.getState().setStatus(HOVER_HINT);
   };
   const overlayDown = (e: ReactPointerEvent) => {
+    if (useEditorStore.getState().tool === "draw") return; // draw-over wins
     const info = borderInfo(e);
-    if (info?.near) beginConnect(relOfPoint(info.pt), e); // else: bubbles → move
+    if (info && (info.near || arrowTool())) {
+      beginConnect(relOfPoint(info.pt), e); // else: bubbles → move
+    }
   };
 
   // A visible accent outline hugging the shape — the Lucid cue that the WHOLE
@@ -298,7 +351,7 @@ export function ConnectionPorts({
               style={{ cursor: "crosshair" }}
               onPointerDown={startConnect(port.rel)}
             >
-              <title>Drag to draw an arrow — drop on empty canvas to add a connected shape</title>
+              <title>Click or drag to draw an arrow — click again (or release) on the target; empty canvas adds a connected shape</title>
             </circle>
             <circle
               cx={px}

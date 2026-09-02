@@ -5,6 +5,7 @@
  */
 import { useCallback } from "react";
 import { useEditorStore } from "../../state/editorStore";
+import { useDiagramStore } from "../../state/diagramStore";
 import { usePagesStore } from "../../state/pagesStore";
 
 function download(blob: Blob, name: string) {
@@ -105,6 +106,26 @@ function svgToPngBlob(
   });
 }
 
+/** Selection-scope export (SelectionFrame chips): the store serializes the
+ * whole page, so the crop is applied here — rewrite the root viewBox/size to
+ * the selected nodes' padded union bbox. Returns null with no selection. */
+function cropToSelection(svg: string): { svg: string; w: number; h: number } | null {
+  const d = useDiagramStore.getState();
+  const picked = d.diagramSelection.map((id) => d.nodes[id]).filter(Boolean);
+  if (!picked.length) return null;
+  const pad = 16;
+  const x0 = Math.min(...picked.map((n) => n.x)) - pad;
+  const y0 = Math.min(...picked.map((n) => n.y)) - pad;
+  const w = Math.max(...picked.map((n) => n.x + n.w)) + pad - x0;
+  const h = Math.max(...picked.map((n) => n.y + n.h)) + pad - y0;
+  // The first viewBox/width/height belong to the root <svg> the store emits.
+  const cropped = svg
+    .replace(/viewBox="[^"]*"/, `viewBox="${x0} ${y0} ${w} ${h}"`)
+    .replace(/width="[^"]*"/, `width="${w}"`)
+    .replace(/height="[^"]*"/, `height="${h}"`);
+  return { svg: cropped, w, h };
+}
+
 export function useExport() {
   const exportSvg = useCallback(() => {
     const st = useEditorStore.getState();
@@ -193,5 +214,40 @@ export function useExport() {
     [exportPng],
   );
 
-  return { exportSvg, exportPng, exportDeckPng };
+  /** Export ONLY the selected shapes as SVG (SelectionFrame chip). */
+  const exportSelectionSvg = useCallback(() => {
+    const st = useEditorStore.getState();
+    const full = st.currentBoardSvg();
+    if (!full) return;
+    const cropped = cropToSelection(full);
+    if (!cropped) return;
+    download(
+      new Blob([cropped.svg], { type: "image/svg+xml" }),
+      (st.docId || "drawing") + "-selection.svg",
+    );
+  }, []);
+
+  /** Export ONLY the selected shapes as PNG (SelectionFrame chip). */
+  const exportSelectionPng = useCallback(async () => {
+    const st = useEditorStore.getState();
+    const full = st.currentBoardSvg();
+    if (!full) return;
+    const cropped = cropToSelection(full);
+    if (!cropped) return;
+    const requested = loadPngScale();
+    const s = fitPngScale(cropped.w, cropped.h, requested);
+    const blob = await svgToPngBlob(cropped.svg, cropped.w, cropped.h, s);
+    if (!blob) {
+      useEditorStore
+        .getState()
+        .setStatus(
+          "PNG export failed — selection too large for this browser, or it references external images.",
+          "error",
+        );
+      return;
+    }
+    download(blob, (st.docId || "drawing") + "-selection.png");
+  }, []);
+
+  return { exportSvg, exportPng, exportDeckPng, exportSelectionSvg, exportSelectionPng };
 }

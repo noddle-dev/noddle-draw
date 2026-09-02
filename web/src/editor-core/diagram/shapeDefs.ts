@@ -85,6 +85,11 @@ export const SHAPE_DEFS: ShapeDef[] = [
   { kind: "lightning", group: "geometric", label: "Lightning", glyph: "⚡", size: { w: 90, h: 120 }, text: "" },
   { kind: "heart", group: "geometric", label: "Heart", glyph: "♡", size: { w: 120, h: 110 }, text: "" },
   { kind: "banner", group: "geometric", label: "Banner", glyph: "🏷", size: { w: 160, h: 70 }, text: "Title" },
+  // Open strokes — plain stroke segments for figurative drawings (whiskers,
+  // limbs, tails, smiles). Stroke-only: the fill never paints.
+  { kind: "line", group: "geometric", label: "Line", glyph: "╱", size: { w: 120, h: 8 }, text: "" },
+  { kind: "curve", group: "geometric", label: "Curve (arch)", glyph: "⌒", size: { w: 120, h: 60 }, text: "" },
+  { kind: "curveDown", group: "geometric", label: "Curve (smile)", glyph: "◡", size: { w: 120, h: 60 }, text: "" },
 
   // ---- flowchart -----------------------------------------------------------
   { kind: "process", group: "flowchart", label: "Predefined process", glyph: "▤", size: { w: 150, h: 80 }, text: "Process" },
