@@ -59,6 +59,7 @@ export function Canvas() {
   const contentRev = useEditorStore((s) => s.contentRev);
   const tool = useEditorStore((s) => s.tool);
   const gridOn = useAppStore((s) => s.gridOn);
+  const pageBackdrop = useAppStore((s) => s.pageBackdrop);
   const diagramNodeCount = useDiagramStore((s) => Object.keys(s.nodes).length);
 
   const { beginTextEdit, editingRef } = useTextEdit(hostRef, contentRef);
@@ -517,6 +518,12 @@ export function Canvas() {
         !e.altKey &&
         e.key.length === 1 &&
         e.key !== " " &&
+        // Simple mode: DIGITS are the visible tool shortcuts (hints under the
+        // island buttons) and must keep working right after an add left the
+        // new shape selected — so they never start type-to-edit there.
+        // Letters still do; a label rarely starts with a digit and dblclick
+        // covers that case.
+        !(useAppStore.getState().uiMode === "simple" && /^[0-9]$/.test(e.key)) &&
         useDiagramStore.getState().diagramSelection.length === 1 &&
         useDiagramStore.getState().nodes[useDiagramStore.getState().diagramSelection[0]]
       ) {
@@ -573,7 +580,7 @@ export function Canvas() {
 
   return (
     <section
-      className={`canvas-host${gridOn ? "" : " no-grid"}${tool === "arrow" || tool === "draw" ? " arrow-tool" : ""}`}
+      className={`canvas-host${gridOn ? "" : " no-grid"}${pageBackdrop ? "" : " no-backdrop"}${tool === "arrow" || tool === "draw" ? " arrow-tool" : ""}`}
       ref={hostRef}
     >
       <svg id="stage" ref={stageRef} xmlns="http://www.w3.org/2000/svg">

@@ -43,8 +43,9 @@ function saveEnabledLibs(libs: Set<string>): void {
 }
 
 /** init overrides for a palette entry (icon nodes carry an iconKey + label;
- * sticky notes carry a fill/stroke color). */
-function entryInit(entry: PaletteEntry): Partial<DiagramNode> {
+ * sticky notes carry a fill/stroke color). Exported: the Simple island's
+ * draw tool arms the same entry semantics. */
+export function entryInit(entry: PaletteEntry): Partial<DiagramNode> {
   const init: Partial<DiagramNode> = {};
   if (entry.iconKey) { init.iconKey = entry.iconKey; init.text = entry.label; }
   if (entry.fill) init.fill = entry.fill;
@@ -53,7 +54,7 @@ function entryInit(entry: PaletteEntry): Partial<DiagramNode> {
   return init;
 }
 
-function addNodeAtCenter(entry: PaletteEntry) {
+export function addNodeAtCenter(entry: PaletteEntry) {
   const ds = useDiagramStore.getState();
   ds.setDiagramMode(true);
   const refs = useEditorStore.getState().refs;
@@ -72,7 +73,7 @@ function addNodeAtCenter(entry: PaletteEntry) {
  * drops the shape exactly there (screen→content via the shared camera).
  * A press without movement still behaves as click-to-add-at-center.
  */
-function startShapeDrag(entry: PaletteEntry) {
+export function startShapeDrag(entry: PaletteEntry) {
   return (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();

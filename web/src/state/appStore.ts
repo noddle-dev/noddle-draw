@@ -20,6 +20,7 @@ export type View = "generate" | "editor";
 export type GenMode = "text" | "sketch" | "mermaid";
 export type LeftTab = "shapes" | "layers";
 export type RightTab = "props" | "claude";
+export type UiMode = "full" | "simple";
 
 export interface ChatMessage {
   who: "ai" | "you";
@@ -172,10 +173,22 @@ interface AppState {
   /** Keyboard-shortcut cheat sheet (? opens, Esc/click closes). */
   shortcutsOpen: boolean;
   setShortcutsOpen: (open: boolean) => void;
+  /** Editor chrome mode — persisted per browser (localStorage). */
+  uiMode: UiMode;
+  setUiMode: (m: UiMode) => void;
 
   // ---- page settings ----
   gridOn: boolean;
   snapOn: boolean;
+  /** draw.io-style growth chevrons on a selected shape (DirectionalArrows) —
+   * users who find them noisy can turn them off; persisted per browser. */
+  quickAddOn: boolean;
+  toggleQuickAdd: () => void;
+  /** The white PAGE behind the shapes. Off = infinite Excalidraw-style
+   * canvas (no artboard rectangle, the whole desk paints white). Persisted
+   * per browser. */
+  pageBackdrop: boolean;
+  togglePageBackdrop: () => void;
 
   // ---- Claude chat (live co-editor) ----
   /** PER-BOARD chat, keyed by docId — each board owns several graph-scoped
@@ -250,6 +263,16 @@ function ensureBoard(chats: Record<string, BoardChats>, key: string): BoardChats
   return { sessions: [s], activeId: s.id };
 }
 
+// Editor chrome preference (Full vs Simple) — survives reloads, per browser.
+const UI_MODE_KEY = "noddle-ui-mode";
+function loadUiMode(): UiMode {
+  try {
+    return localStorage.getItem(UI_MODE_KEY) === "simple" ? "simple" : "full";
+  } catch {
+    return "full";
+  }
+}
+
 // Chat sessions survive a page reload (per tab). Best-effort — quota/privacy
 // errors just mean an empty history.
 const CHATS_KEY = "noddle-chats-v2";
@@ -299,9 +322,38 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => ({ focusMode: on ?? !s.focusMode })),
   shortcutsOpen: false,
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  uiMode: loadUiMode(),
+  setUiMode: (m) => {
+    try {
+      localStorage.setItem(UI_MODE_KEY, m);
+    } catch {
+      /* private mode — preference just won't survive the reload */
+    }
+    set({ uiMode: m });
+  },
 
   gridOn: true,
   snapOn: true,
+  quickAddOn: localStorage.getItem("noddle-quick-add") !== "0",
+  pageBackdrop: localStorage.getItem("noddle-page-backdrop") !== "0",
+  togglePageBackdrop: () =>
+    set((s) => {
+      try {
+        localStorage.setItem("noddle-page-backdrop", s.pageBackdrop ? "0" : "1");
+      } catch {
+        /* private mode */
+      }
+      return { pageBackdrop: !s.pageBackdrop };
+    }),
+  toggleQuickAdd: () =>
+    set((s) => {
+      try {
+        localStorage.setItem("noddle-quick-add", s.quickAddOn ? "0" : "1");
+      } catch {
+        /* private mode */
+      }
+      return { quickAddOn: !s.quickAddOn };
+    }),
 
   chats: loadChats(),
   aiThinking: false,

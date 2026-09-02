@@ -25,6 +25,7 @@ import { api } from "../../shared/api/client";
 import { EditorTopbar } from "./EditorTopbar";
 import { LeftPanel } from "./LeftPanel";
 import { RightPanel } from "./RightPanel";
+import { SimpleChrome } from "./SimpleMode";
 import { CanvasCollab } from "./CanvasCollab";
 import { CommentsLayer } from "../comments/CommentsLayer";
 import { ShortcutsModal } from "./ShortcutsModal";
@@ -112,6 +113,11 @@ export function EditorScreen() {
   const focusMode = useAppStore((s) => s.focusMode);
   const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
   const notFound = useEditorStore((s) => s.notFound);
+  // Simple mode: swap the docked chrome for floating islands — the canvas,
+  // collab, comments and all engine behavior are untouched. Embeds keep their
+  // own chrome-less rendering regardless of the stored preference.
+  const uiMode = useAppStore((s) => s.uiMode);
+  const simple = uiMode === "simple" && !embedMode;
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
 
   // Presentation mode: fullscreen (best-effort) + ←/→ page nav + Esc exits.
@@ -150,6 +156,38 @@ export function EditorScreen() {
 
   // Start diagram-layer undo/redo checkpointing (idempotent).
   useEffect(startDiagramHistory, []);
+
+  // Keep the viewport visually anchored across the Full ↔ Simple swap. The
+  // docked panels/topbar change the canvas host's size AND offset, while the
+  // camera transform is host-relative — so without this, the board "jumps" by
+  // exactly the panel width/topbar height. The zustand subscriber runs
+  // synchronously inside setUiMode, BEFORE React re-renders: capture the
+  // content point under the old canvas center there, then after the new
+  // layout paints (double rAF), pan the camera so the same content point sits
+  // at the new center. Zoom is untouched.
+  useEffect(() => {
+    return useAppStore.subscribe((s, prev) => {
+      if (s.uiMode === prev.uiMode) return;
+      const es = useEditorStore.getState();
+      if (!es.refs) return;
+      const r = es.refs.host.getBoundingClientRect();
+      const c = screenToContent(es.refs.content, r.left + r.width / 2, r.top + r.height / 2);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const es2 = useEditorStore.getState();
+          if (!es2.refs) return;
+          const r2 = es2.refs.host.getBoundingClientRect();
+          const ctm = es2.refs.content.getScreenCTM();
+          if (!ctm) return;
+          const p = new DOMPoint(c.x, c.y).matrixTransform(ctm);
+          const dx = r2.left + r2.width / 2 - p.x;
+          const dy = r2.top + r2.height / 2 - p.y;
+          if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+          es2.setCam({ x: es2.cam.x + dx, y: es2.cam.y + dy, z: es2.cam.z });
+        }),
+      );
+    });
+  }, []);
 
   // Right-click a diagram object (or a multi-selection) → context menu with
   // AI-enrich / group-by / z-order / delete.
@@ -306,13 +344,14 @@ export function EditorScreen() {
         (presenting ? " presenting" : "") +
         (embedMode ? " embedding" : "") +
         (focusMode ? " focus" : "") +
+        (simple ? " simple" : "") +
         (!leftPanelOpen ? " hide-left" : "") +
         (!rightPanelOpen ? " hide-right" : "")
       }
     >
-      <EditorTopbar />
+      {!simple && <EditorTopbar />}
       <div className="editor-body">
-        <LeftPanel />
+        {!simple && <LeftPanel />}
         <div className="editor-canvas">
           <Canvas />
           <CanvasCollab />
@@ -320,9 +359,11 @@ export function EditorScreen() {
           {ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
           <PageBar />
         </div>
-        <RightPanel />
+        {!simple && <RightPanel />}
       </div>
-      <StatusBar />
+      {!simple && <StatusBar />}
+      {/* Focus mode hides ALL chrome — the floating islands included. */}
+      {simple && !presenting && !focusMode && <SimpleChrome />}
       {presenting && <PresentHud />}
       {focusMode && !presenting && <FocusHud />}
       {shortcutsOpen && <ShortcutsModal />}

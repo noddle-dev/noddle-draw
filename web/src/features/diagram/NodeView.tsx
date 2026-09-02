@@ -51,10 +51,12 @@ export function NodeView({
   const selected = useDiagramStore((s) =>
     s.diagramSelection.includes(node.id),
   );
-  // draw.io-style growth arrows only make sense on a SOLO selection.
+  // draw.io-style growth arrows only make sense on a SOLO selection — and
+  // only while the user hasn't switched the affordance off (Properties panel).
   const soloSelected = useDiagramStore(
     (s) => s.diagramSelection.length === 1 && s.diagramSelection[0] === node.id,
   );
+  const quickAddOn = useAppStore((s) => s.quickAddOn);
   // Hand cursor: open hand (grab) over a shape, closed hand (grabbing) while
   // dragging it — the Lucid/Figma affordance for "this is draggable".
   const dragging = useDiagramStore((s) => s.draggingId === node.id);
@@ -267,7 +269,7 @@ export function NodeView({
       {selected && <ResizeHandles node={node} />}
       {/* draw.io-style directional arrows: click → same-kind connected shape,
           hover → mini shape picker. Solo selection only. */}
-      {soloSelected && <DirectionalArrows node={node} />}
+      {soloSelected && quickAddOn && <DirectionalArrows node={node} />}
     </g>
   );
 }
