@@ -767,6 +767,10 @@ components:
         italic: { type: boolean }
         underline: { type: boolean }
         textColor: { type: string }
+        fontFamily:
+          type: string
+          enum: [sans, mono, serif]
+        letterSpacing: { type: number }
         textAlign:
           type: string
           enum: [left, center, right]
@@ -800,9 +804,12 @@ components:
              display, card, internalStorage, note, sticky, actor, triangle,
              pentagon, star, cross, cloud, callout, trapezoid, octagon,
              semicircle, ring, shield, lightning, heart, banner,
+             line, curve, curveDown,
              multiDocument, storedData, queue, loopLimit, merge, offPage,
              arrowRight, arrowLeft, arrowDouble, chevron, umlClass, package,
-             component, icon, image]
+             component, paperTape, summingJunction, orJunction, braceRight,
+             braceLeft, bracketLeft, bracketRight, table, tableHeader,
+             icon, image]
     Attachment:
       description: How an edge endpoint attaches — port (fixed relative point),
         floating (border point computed toward the far end), or free
