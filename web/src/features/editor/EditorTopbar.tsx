@@ -30,6 +30,7 @@ import { TemplatesModal } from "../templates/TemplatesModal";
 import { createBoard } from "../templates/templates";
 import { usePagesStore } from "../../state/pagesStore";
 import { diagramToMermaid } from "../../editor-core/diagram";
+import { UiModeSwitch } from "./UiModeSwitch";
 
 /** Download a text file (open-format exports — #15). */
 function downloadText(filename: string, text: string, mime: string): void {
@@ -62,8 +63,9 @@ function exportMermaid(title: string): void {
   );
 }
 
-/** Share dialog: your display name + the shareable link (the capability). */
-function ShareDialog({
+/** Share dialog: your display name + the shareable link (the capability).
+ * Exported: Simple mode reuses it from its own top-right island. */
+export function ShareDialog({
   docId,
   title,
   onClose,
@@ -159,7 +161,8 @@ function ShareDialog({
   );
 }
 
-function Presence() {
+/** Exported: Simple mode shows the same avatars in its top-right cluster. */
+export function Presence() {
   const peers = useCollabStore((s) => s.peers);
   const you = useCollabStore((s) => s.you);
   const connected = useCollabStore((s) => s.connected);
@@ -550,6 +553,10 @@ export function EditorTopbar() {
         <ShareDialog docId={docId} title={title} onClose={() => setShareOpen(false)} />
       )}
       {tplModalOpen && <TemplatesModal />}
+
+      {/* LAST on the right — the identical anchor Simple mode uses, so the
+          switch never jumps position when toggling layouts. */}
+      <UiModeSwitch />
     </div>
   );
 }
