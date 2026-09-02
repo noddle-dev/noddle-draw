@@ -199,6 +199,33 @@ export function pointAtT(points: Vec[], t: number): Vec {
   return points[points.length - 1];
 }
 
+/**
+ * Unit direction of the polyline SEGMENT that contains fraction `t`.
+ *
+ * A label must clear the line it annotates, and which way "clear" points
+ * depends on the local run: a horizontal segment pushes the label up, a
+ * vertical one pushes it sideways (a label stacked above a vertical arrow
+ * lands on whatever the arrow is heading into). `pointAtT` alone can't say —
+ * hence this companion. Degenerate polylines report a horizontal run so the
+ * caller still gets the common case.
+ */
+export function segmentDirAtT(points: Vec[], t: number): Vec {
+  if (points.length < 2) return { x: 1, y: 0 };
+  const { segs, total } = segLengths(points);
+  if (total === 0) return { x: 1, y: 0 };
+  let want = Math.min(1, Math.max(0, t)) * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (want <= segs[i] || i === segs.length - 1) {
+      const dx = points[i + 1].x - points[i].x;
+      const dy = points[i + 1].y - points[i].y;
+      const len = Math.hypot(dx, dy);
+      return len === 0 ? { x: 1, y: 0 } : { x: dx / len, y: dy / len };
+    }
+    want -= segs[i];
+  }
+  return { x: 1, y: 0 };
+}
+
 /** Arc-length fraction (0..1) of the point on the polyline nearest to `p` —
  * used to anchor a label where the user clicks along the connector. */
 export function tOfPoint(points: Vec[], p: Vec): number {

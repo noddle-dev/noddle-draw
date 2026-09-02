@@ -15,6 +15,7 @@ import { EdgeView, ARROW_HEADS, headMarkerId } from "./EdgeView";
 import { EdgeEndpointHandles } from "./EdgeEndpointHandles";
 import { SegmentHandles } from "./SegmentHandles";
 import { NodeView, RotateHandle } from "./NodeView";
+import { SelectionFrame } from "./SelectionFrame";
 import type { PreviewEdge } from "./ConnectionPorts";
 import { portPoint } from "../../editor-core/diagram";
 import type { ArrowHead, DiagramEdge, DiagramNode } from "../../editor-core/diagram";
@@ -159,6 +160,9 @@ export function DiagramLayer() {
           <NodeView key={it.node.id} node={it.node} onPreviewChange={setPreview} />
         ),
       )}
+
+      {/* multi-select bounding frame + export-selection chips */}
+      <SelectionFrame />
 
       {/* preview connector while dragging from a port — the real arrow look
           (arrowhead + elbow routing) at reduced opacity; snaps solid on a

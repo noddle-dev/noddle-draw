@@ -22,6 +22,7 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { useAppStore } from "../../state/appStore";
 import { panState } from "../../state/panState";
 import { beginNodeTextEdit } from "./nodeTextEdit";
+import { LABEL_INK, nodeFontStack } from "./typography";
 import { ConnectionPorts, type PreviewEdge } from "./ConnectionPorts";
 import { DirectionalArrows } from "./DirectionalArrows";
 import { shapeElement } from "./ShapePalette";
@@ -62,6 +63,9 @@ export function NodeView({
   const onPointerDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     if (panState.spaceHeld) return; // Space-pan owns the gesture — hand drags the page
+    // Draw tool armed: the canvas draws the new shape — even over this node
+    // (Excalidraw semantics). Let the event bubble to the stage handler.
+    if (useEditorStore.getState().tool === "draw") return;
     e.stopPropagation();
     const d = useDiagramStore.getState();
     // Keep both nodes AND edges — mixed selections group/delete together;
@@ -219,8 +223,9 @@ export function NodeView({
           fontWeight={node.bold ? 700 : undefined}
           fontStyle={node.italic ? "italic" : undefined}
           textDecoration={node.underline ? "underline" : undefined}
-          fill={node.textColor ?? "#1a1d23"}
-          fontFamily={node.sketch ? '"Comic Sans MS", "Segoe Print", "Bradley Hand", cursive' : undefined}
+          fill={node.textColor ?? LABEL_INK}
+          fontFamily={nodeFontStack(node)}
+          letterSpacing={node.letterSpacing || undefined}
           style={{ pointerEvents: "none", userSelect: "none" }}
         >
           {/* Multi-line labels: \n from the editor + auto word-wrap when

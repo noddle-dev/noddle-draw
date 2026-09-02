@@ -57,6 +57,7 @@ export function Canvas() {
   const artboard = useEditorStore((s) => s.artboard);
   const selection = useEditorStore((s) => s.selection);
   const contentRev = useEditorStore((s) => s.contentRev);
+  const tool = useEditorStore((s) => s.tool);
   const gridOn = useAppStore((s) => s.gridOn);
   const diagramNodeCount = useDiagramStore((s) => Object.keys(s.nodes).length);
 
@@ -206,6 +207,57 @@ export function Canvas() {
       };
     };
 
+    // Draw-shape tool (Excalidraw-style): with a shape armed (editorStore
+    // drawSpec), dragging on the canvas draws the REAL shape live — the node
+    // is created once the pointer travels 6px and then resized with the drag,
+    // so the preview is pixel-true (kind, colors, label). A plain click
+    // (never crossing 6px) creates NOTHING, so accidental taps stay
+    // consequence-free. The tool stays armed (sticky); Esc/Select disarms.
+    const startDrawShape = (e: PointerEvent) => {
+      stage.setPointerCapture(e.pointerId);
+      const p0 = screenToContent(content, e.clientX, e.clientY);
+      let createdId: string | null = null;
+      const frame = (ev: PointerEvent) => {
+        const p1 = screenToContent(content, ev.clientX, ev.clientY);
+        const x = Math.min(p0.x, p1.x);
+        const y = Math.min(p0.y, p1.y);
+        const w = Math.max(20, Math.abs(p1.x - p0.x));
+        const h = Math.max(20, Math.abs(p1.y - p0.y));
+        return { x, y, w, h };
+      };
+      dragRef.current = {
+        move: (ev) => {
+          const spec = s().drawSpec;
+          if (!spec) return;
+          const ds = useDiagramStore.getState();
+          const box = frame(ev);
+          if (!createdId) {
+            if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 6) return;
+            ds.setDiagramMode(true);
+            createdId = ds.addNodeAt(
+              spec.kind,
+              { x: box.x + box.w / 2, y: box.y + box.h / 2 },
+              {
+                ...spec.init,
+                // Draw-tool defaults: NO auto label (a drawn shape starts
+                // blank — dblclick/type to name it) and a soft 3px corner
+                // radius, both overridable by the style panel (drawStyle).
+                text: "",
+                cornerRadius: 3,
+                ...s().drawStyle,
+                ...box,
+              },
+            );
+          } else {
+            ds.updateNode(createdId, box);
+          }
+        },
+        up: () => {
+          /* click without a drag: no node was minted, nothing to do */
+        },
+      };
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       // Space-pan overrides EVERYTHING — grips, shapes, ports all step aside
       // (they check panState themselves) and the hand drags the page.
@@ -213,13 +265,19 @@ export function Canvas() {
         if ((e.target as Element).closest("[data-handle]")) return; // startResize owns it
         // The diagram layer owns its own pointer interactions (node drag, port
         // drag-to-connect, edge select). This handler is a NATIVE listener so it
-        // fires regardless of React stopPropagation — skip explicitly.
-        if ((e.target as Element).closest("#diagram-layer")) return;
+        // fires regardless of React stopPropagation — skip explicitly. EXCEPT
+        // in draw mode: a new shape is drawn even over existing objects
+        // (NodeView/ConnectionPorts step aside for the same reason).
+        if (s().tool !== "draw" && (e.target as Element).closest("#diagram-layer")) return;
       }
       const wantPan =
         s().tool === "pan" || e.button === 1 || spaceDownRef.current;
       if (wantPan) {
         startPan(e);
+        return;
+      }
+      if (s().tool === "draw" && s().drawSpec && e.button === 0) {
+        startDrawShape(e);
         return;
       }
       const obj = topObject(
@@ -481,6 +539,7 @@ export function Canvas() {
         }
         s().setSelection([]);
         useDiagramStore.getState().setDiagramSelection([]);
+        if (s().tool === "arrow" || s().tool === "draw") s().setTool("select"); // disarm
       } else if (e.shiftKey && e.key === "!") {
         s().fitToView();
       }
@@ -507,8 +566,16 @@ export function Canvas() {
   const showEmptyHint =
     selection.length === 0 && contentRev === 0 && diagramNodeCount === 0;
 
+  // Before any board content exists the artboard still has its 100×100
+  // default — rendering it would paint a stray white square in the top-left
+  // corner on every reload, so keep the paper hidden until something loads.
+  const boardEmpty = contentRev === 0 && diagramNodeCount === 0;
+
   return (
-    <section className={`canvas-host${gridOn ? "" : " no-grid"}`} ref={hostRef}>
+    <section
+      className={`canvas-host${gridOn ? "" : " no-grid"}${tool === "arrow" || tool === "draw" ? " arrow-tool" : ""}`}
+      ref={hostRef}
+    >
       <svg id="stage" ref={stageRef} xmlns="http://www.w3.org/2000/svg">
         <g id="camera" ref={cameraRef}>
           <rect
@@ -519,6 +586,7 @@ export function Canvas() {
             width={artboard.w}
             height={artboard.h}
             className="artboard"
+            style={{ visibility: boardEmpty ? "hidden" : undefined }}
           />
           <g id="content" ref={contentRef} />
           <DiagramLayer />

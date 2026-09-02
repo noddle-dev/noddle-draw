@@ -30,6 +30,7 @@ import {
   type Tool,
 } from "../editor-core";
 import { FLOW_INTENSITY, type FlowIntensity } from "../editor-core/diagram";
+import type { DiagramNode, NodeKind } from "../editor-core/diagram";
 import { api, ApiError, type DocMeta } from "../shared/api/client";
 import { scrubSvgString } from "../shared/svgScrub";
 import {
@@ -121,6 +122,15 @@ interface EditorState {
   attach: (refs: StageRefs, cameraEl: SVGGElement) => void;
   setStatus: (msg: string, kind?: StatusKind) => void;
   setTool: (tool: Tool) => void;
+  /** Shape the "draw" tool creates (Excalidraw-style: arm a shape, then drag
+   * A→B on the canvas for that size — a plain click draws nothing). */
+  drawSpec: { kind: NodeKind; init?: Partial<DiagramNode> } | null;
+  armDrawTool: (spec: { kind: NodeKind; init?: Partial<DiagramNode> }) => void;
+  /** Style the draw tool stamps on every new shape (stroke/fill/width/dash/
+   * sketch/corner/opacity). Persisted per browser; merged over the palette
+   * entry's own init. */
+  drawStyle: Partial<DiagramNode>;
+  setDrawStyle: (patch: Partial<DiagramNode>) => void;
 
   applyCamera: () => void;
   setCam: (cam: Camera) => void;
@@ -197,6 +207,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setTool(tool) {
     set({ tool });
+  },
+
+  drawSpec: null,
+  armDrawTool(spec) {
+    set({ tool: "draw", drawSpec: spec });
+  },
+
+  drawStyle: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("noddle-draw-style") ?? "{}");
+    } catch {
+      return {};
+    }
+  })(),
+  setDrawStyle(patch) {
+    // undefined values REMOVE the key (e.g. back to solid stroke / opaque).
+    const next: Partial<DiagramNode> = { ...get().drawStyle };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) delete (next as Record<string, unknown>)[k];
+      else (next as Record<string, unknown>)[k] = v;
+    }
+    try {
+      localStorage.setItem("noddle-draw-style", JSON.stringify(next));
+    } catch {
+      /* private mode */
+    }
+    set({ drawStyle: next });
   },
 
   applyCamera() {

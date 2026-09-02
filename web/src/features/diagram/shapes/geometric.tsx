@@ -20,6 +20,38 @@ export const geometricShapes: Record<string, ShapeRenderer> = {
     <polygon points={polygonPoints(n, "octagon")} {...common(n)} strokeLinejoin="round" />
   ),
 
+  // --- open strokes (2026-09): whiskers/limbs/tails for figurative boards.
+  // STROKE-ONLY on purpose — fill never paints, and a hairline default would
+  // vanish at small sizes, so the width floors at 1.5.
+  line: (n) => (
+    <line
+      x1={n.x} y1={n.y} x2={n.x + n.w} y2={n.y + n.h}
+      fill="none" stroke={n.stroke} strokeWidth={Math.max(n.strokeWidth, 1.5)}
+      strokeLinecap="round"
+    />
+  ),
+
+  curve: (n) => {
+    const { x, y, w, h } = n;
+    // Quadratic arch ∩ — control at y−h puts the curve's PEAK exactly on the
+    // box top edge (t=0.5 of a quadratic reaches half the control offset).
+    const d = `M ${x} ${y + h} Q ${x + w / 2} ${y - h} ${x + w} ${y + h}`;
+    return (
+      <path d={d} fill="none" stroke={n.stroke}
+        strokeWidth={Math.max(n.strokeWidth, 1.5)} strokeLinecap="round" />
+    );
+  },
+
+  curveDown: (n) => {
+    const { x, y, w, h } = n;
+    // Mirror bowl ∪ — trough on the box bottom edge.
+    const d = `M ${x} ${y} Q ${x + w / 2} ${y + 2 * h} ${x + w} ${y}`;
+    return (
+      <path d={d} fill="none" stroke={n.stroke}
+        strokeWidth={Math.max(n.strokeWidth, 1.5)} strokeLinecap="round" />
+    );
+  },
+
   semicircle: (n) => {
     const { x, y, w, h } = n;
     const d = `M ${x} ${y + h} A ${w / 2} ${h} 0 0 1 ${x + w} ${y + h} Z`;

@@ -1390,6 +1390,13 @@ class AIService:
                 node["textColor"] = n["textColor"][:32]
             if n.get("textAlign") in ("left", "center", "right"):
                 node["textAlign"] = n["textAlign"]
+            # fontFamily is a TOKEN (sans|mono|serif) resolved to a real font
+            # stack by the frontend; letterSpacing is clamped to sane tracking.
+            if n.get("fontFamily") in ("sans", "mono", "serif"):
+                node["fontFamily"] = n["fontFamily"]
+            ls = opt_num(n.get("letterSpacing"))
+            if ls is not None and -2 <= ls <= 8:
+                node["letterSpacing"] = ls
             op = opt_num(n.get("opacity"))
             if op is not None:
                 node["opacity"] = min(1.0, max(0.0, op))

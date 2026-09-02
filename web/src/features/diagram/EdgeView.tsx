@@ -21,6 +21,7 @@ import {
   DOTS_CYCLE_MS,
   dotsForLength,
   pointAtT,
+  segmentDirAtT,
   tOfPoint,
   FLOW_INTENSITY,
   type NodeMap,
@@ -31,6 +32,7 @@ import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { panState } from "../../state/panState";
 import { beginEdgeLabelEdit } from "./edgeLabelEdit";
+import { LABEL_INK, FONT_STACKS, LABEL_CHIP, labelChipWidth, labelChipOffset } from "./typography";
 
 const HIT_STROKE = 12;
 
@@ -294,7 +296,15 @@ export function EdgeView({
       )}
       {/* Legacy single midpoint label + the multi-block labels, each a chip
           floating ON the line (double-click a chip to edit just that block). */}
-      {edge.label && <LabelChip cx={mx} cy={my} text={edge.label} onEdit={() => beginEdgeLabelEdit(edge.id, { x: mx, y: my })} />}
+      {edge.label && (
+        <LabelChip
+          cx={mx}
+          cy={my}
+          dir={segmentDirAtT(geom.points, 0.5)}
+          text={edge.label}
+          onEdit={() => beginEdgeLabelEdit(edge.id, { x: mx, y: my })}
+        />
+      )}
       {(edge.labels ?? []).map((lb) => {
         const p = pointAtT(geom.points, lb.t);
         return (
@@ -302,6 +312,7 @@ export function EdgeView({
             key={lb.id}
             cx={p.x}
             cy={p.y}
+            dir={segmentDirAtT(geom.points, lb.t)}
             text={lb.text}
             onEdit={() => beginEdgeLabelEdit(edge.id, p, lb.id)}
             onDragTo={(clientX, clientY) => {
@@ -317,18 +328,24 @@ export function EdgeView({
   );
 }
 
-/** A rounded white chip with centered text, floating on the connector.
+/** A rounded white chip with centered text, sitting CLEAR of the connector
+ * (see LABEL_CHIP.GAP — a label must never hide the line it annotates).
  * Double-click edits this block; press-and-drag slides it along the line. */
 function LabelChip({
-  cx, cy, text, onEdit, onDragTo,
+  cx, cy, dir, text, onEdit, onDragTo,
 }: {
-  cx: number; cy: number; text: string;
+  cx: number; cy: number; dir: { x: number; y: number }; text: string;
   onEdit: () => void;
   onDragTo?: (clientX: number, clientY: number) => void;
 }) {
-  const fs = 12;
-  const chipW = Math.max(18, text.length * fs * 0.62 + 12);
+  const fs = LABEL_CHIP.FONT_SIZE;
+  const chipW = labelChipWidth(text);
   const chipH = fs + 8;
+  // The anchor stays ON the line (drag maps a click back to t via tOfPoint);
+  // only the painted chip is lifted clear of it.
+  const { dx, dy } = labelChipOffset(text, dir);
+  const lx = cx + dx;
+  const ly = cy + dy;
   const onPointerDown = (e: ReactPointerEvent) => {
     if (panState.spaceHeld) return; // hand-pan wins
     if (e.button !== 0 || !onDragTo) return;
@@ -347,10 +364,20 @@ function LabelChip({
       onPointerDown={onPointerDown}
       onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}
     >
-      <rect x={cx - chipW / 2} y={cy - chipH / 2} width={chipW} height={chipH} rx={6} ry={6}
-        fill="#ffffff" stroke="var(--border, #e6e8ec)" strokeWidth={1} />
-      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fontSize={fs}
-        fill="#1a1d23" style={{ userSelect: "none" }}>
+      {/* Excalidraw-style: a borderless canvas-colored halo that masks the
+          line under the text — no chip outline. */}
+      {/* Label ink is the editorial `ink` token (ADR-0009). It used to be a
+          hardcoded #1a1d23, which is ΔE 12 away from the palette — far enough
+          to read as a foreign hue, and unreachable from board JSON since
+          EdgeLabelBlock carries no colour. Nodes already resolve their own
+          textColor; edge labels had no such escape hatch. */}
+      <rect x={lx - chipW / 2} y={ly - chipH / 2} width={chipW} height={chipH} rx={4} ry={4}
+        fill="#ffffff" />
+      {/* Mono + open tracking: the reference sets arrow labels in Geist Mono,
+          uppercase, letter-spaced — the strongest single typographic tell. */}
+      <text x={lx} y={ly} textAnchor="middle" dominantBaseline="central" fontSize={fs}
+        fontFamily={FONT_STACKS.mono} letterSpacing={0.7}
+        fill={LABEL_INK} style={{ userSelect: "none" }}>
         {text}
       </text>
     </g>

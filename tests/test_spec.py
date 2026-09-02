@@ -447,6 +447,8 @@ NODE_FIELD_SAMPLES = {
     "italic": True,
     "underline": True,
     "textColor": "#112233",
+    "fontFamily": "mono",
+    "letterSpacing": 0.6,
     "textAlign": "left",
     "wrap": True,
     "opacity": 0.5,
