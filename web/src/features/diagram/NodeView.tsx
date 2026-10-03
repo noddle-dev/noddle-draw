@@ -56,12 +56,7 @@ export function NodeView({
   // Connect affordance (ports + border band) exists ONLY in arrow mode —
   // select mode is pure move/resize.
   const arrowMode = useEditorStore((s) => s.tool === "arrow");
-  // OSS keeps the docked Full UI, which has no Arrow tool button — there the
-  // select tool still draws connectors from a shape's border (pre-sync
-  // behavior). Simple mode follows Excalidraw: connectors only in Arrow mode.
-  const selectTool = useEditorStore((s) => s.tool === "select");
-  const fullUi = useAppStore((s) => s.uiMode === "full");
-  const connectMode = arrowMode || (fullUi && selectTool);
+  const connectMode = arrowMode;
   // Hand cursor: open hand (grab) over a shape, closed hand (grabbing) while
   // dragging it — the Lucid/Figma affordance for "this is draggable".
   const dragging = useDiagramStore((s) => s.draggingId === node.id);

@@ -5,7 +5,6 @@
  */
 import { useCallback } from "react";
 import { useEditorStore } from "../../state/editorStore";
-import { useDiagramStore } from "../../state/diagramStore";
 import { usePagesStore } from "../../state/pagesStore";
 
 function download(blob: Blob, name: string) {
@@ -106,43 +105,63 @@ function svgToPngBlob(
   });
 }
 
-/** Selection-scope export (SelectionFrame chips): the store serializes the
- * whole page, so the crop is applied here — rewrite the root viewBox/size to
- * the selected nodes' padded union bbox. Returns null with no selection. */
-function cropToSelection(svg: string): { svg: string; w: number; h: number } | null {
-  const d = useDiagramStore.getState();
-  const picked = d.diagramSelection.map((id) => d.nodes[id]).filter(Boolean);
-  if (!picked.length) return null;
-  const pad = 16;
-  const x0 = Math.min(...picked.map((n) => n.x)) - pad;
-  const y0 = Math.min(...picked.map((n) => n.y)) - pad;
-  const w = Math.max(...picked.map((n) => n.x + n.w)) + pad - x0;
-  const h = Math.max(...picked.map((n) => n.y + n.h)) + pad - y0;
-  // The first viewBox/width/height belong to the root <svg> the store emits.
-  const cropped = svg
-    .replace(/viewBox="[^"]*"/, `viewBox="${x0} ${y0} ${w} ${h}"`)
-    .replace(/width="[^"]*"/, `width="${w}"`)
-    .replace(/height="[^"]*"/, `height="${h}"`);
-  return { svg: cropped, w, h };
+/** draw.io-style export framing: whole page, cropped to content, or selection. */
+export type ExportScope = "page" | "fit" | "selection";
+const SUFFIX: Record<ExportScope, string> = { page: "", fit: "-fit", selection: "-selection" };
+
+/** Width/height of an exported SVG string's viewBox — the source of truth for
+ * the raster size (scope changes the box, not the artboard). */
+function boxOf(svg: string, fallbackW: number, fallbackH: number): { w: number; h: number } {
+  const m = /viewBox="[^"]*?\s([\d.]+)\s([\d.]+)"/.exec(svg);
+  return m ? { w: parseFloat(m[1]), h: parseFloat(m[2]) } : { w: fallbackW, h: fallbackH };
+}
+
+/**
+ * ⌘⇧C — copy the selection (or the whole board's content when nothing is
+ * selected) to the system clipboard as a PNG, Excalidraw-style. The blob is
+ * handed to ClipboardItem as a PROMISE so Safari keeps the user gesture.
+ */
+export function copyPngToClipboard(): void {
+  const st = useEditorStore.getState();
+  const svg = st.currentBoardSvg({ scope: "selection" });
+  if (!svg) return;
+  const { w, h } = boxOf(svg, st.artboard.w, st.artboard.h);
+  if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+    st.setStatus("This browser can't copy images — use Export → PNG.", "error");
+    return;
+  }
+  const scale = fitPngScale(w, h, loadPngScale());
+  const blob = svgToPngBlob(svg, w, h, scale).then((b) => {
+    if (!b) throw new Error("rasterize failed");
+    return b;
+  });
+  navigator.clipboard
+    .write([new ClipboardItem({ "image/png": blob })])
+    .then(() => useEditorStore.getState().setStatus("Copied as PNG — paste it anywhere.", "ok"))
+    .catch(() =>
+      useEditorStore.getState().setStatus("Couldn't copy the image (clipboard blocked).", "error"),
+    );
 }
 
 export function useExport() {
-  const exportSvg = useCallback(() => {
+  const exportSvg = useCallback((scope: ExportScope = "page") => {
     const st = useEditorStore.getState();
-    const svg = st.currentBoardSvg();
+    const svg = st.currentBoardSvg({ scope });
     if (!svg) return;
     download(
       new Blob([svg], { type: "image/svg+xml" }),
-      (st.docId || "drawing") + ".svg",
+      (st.docId || "drawing") + SUFFIX[scope] + ".svg",
     );
   }, []);
 
-  const exportPng = useCallback(async (scale?: number) => {
+  /** PNG at the chosen scale (1×/2×/4× of the framed box — defaults to the
+   * remembered export scale). */
+  const exportPng = useCallback(async (scope: ExportScope = "page", scale?: number) => {
     const st = useEditorStore.getState();
-    const svg = st.currentBoardSvg();
+    const svg = st.currentBoardSvg({ scope });
     if (!svg) return;
-    const { w, h } = st.artboard;
-    const requested = normalizePngScale(scale);
+    const { w, h } = boxOf(svg, st.artboard.w, st.artboard.h);
+    const requested = normalizePngScale(scale ?? loadPngScale());
     const s = fitPngScale(w, h, requested);
     const blob = await svgToPngBlob(svg, w, h, s);
     if (!blob) {
@@ -154,7 +173,7 @@ export function useExport() {
         );
       return;
     }
-    download(blob, (st.docId || "drawing") + ".png");
+    download(blob, (st.docId || "drawing") + SUFFIX[scope] + ".png");
     if (s < requested) {
       useEditorStore
         .getState()
@@ -169,11 +188,11 @@ export function useExport() {
    * the live canvas, so we switch → wait two frames → rasterize → restore. */
   const exportDeckPng = useCallback(
     async (scale?: number) => {
-      const requested = normalizePngScale(scale);
+      const requested = normalizePngScale(scale ?? loadPngScale());
       // Hidden pages are excluded from the deck export.
       const pages = usePagesStore.getState().pages.filter((p) => !p.hidden);
       if (pages.length <= 1) {
-        await exportPng(requested);
+        await exportPng("page", requested);
         return;
       }
       const original = usePagesStore.getState().activeId;
@@ -214,40 +233,5 @@ export function useExport() {
     [exportPng],
   );
 
-  /** Export ONLY the selected shapes as SVG (SelectionFrame chip). */
-  const exportSelectionSvg = useCallback(() => {
-    const st = useEditorStore.getState();
-    const full = st.currentBoardSvg();
-    if (!full) return;
-    const cropped = cropToSelection(full);
-    if (!cropped) return;
-    download(
-      new Blob([cropped.svg], { type: "image/svg+xml" }),
-      (st.docId || "drawing") + "-selection.svg",
-    );
-  }, []);
-
-  /** Export ONLY the selected shapes as PNG (SelectionFrame chip). */
-  const exportSelectionPng = useCallback(async () => {
-    const st = useEditorStore.getState();
-    const full = st.currentBoardSvg();
-    if (!full) return;
-    const cropped = cropToSelection(full);
-    if (!cropped) return;
-    const requested = loadPngScale();
-    const s = fitPngScale(cropped.w, cropped.h, requested);
-    const blob = await svgToPngBlob(cropped.svg, cropped.w, cropped.h, s);
-    if (!blob) {
-      useEditorStore
-        .getState()
-        .setStatus(
-          "PNG export failed — selection too large for this browser, or it references external images.",
-          "error",
-        );
-      return;
-    }
-    download(blob, (st.docId || "drawing") + "-selection.png");
-  }, []);
-
-  return { exportSvg, exportPng, exportDeckPng, exportSelectionSvg, exportSelectionPng };
+  return { exportSvg, exportPng, exportDeckPng };
 }

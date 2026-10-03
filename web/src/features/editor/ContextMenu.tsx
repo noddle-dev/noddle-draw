@@ -8,6 +8,7 @@
  *   ✕ Delete           — delete the selection
  * All AI actions ride the same non-blocking chat queue (per-board session).
  */
+import { groupSelected, groupState, ungroupSelected } from "../../state/grouping";
 import { useState } from "react";
 import { useAppStore } from "../../state/appStore";
 import { useDiagramStore } from "../../state/diagramStore";
@@ -28,10 +29,11 @@ export function ContextMenu({
   onClose: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
-  const { exportSelectionPng, exportSelectionSvg } = useExport();
+  const { exportPng, exportSvg } = useExport();
   const nodes = useDiagramStore((s) => s.nodes);
   const edges = useDiagramStore((s) => s.edges);
   const nodeIds = menu.ids.filter((id) => nodes[id]);
+  const grp = groupState(nodes, menu.ids);
   // Exactly one edge selected → offer "add a connected shape" at either end.
   const soleEdgeId = menu.ids.length === 1 && edges[menu.ids[0]] ? menu.ids[0] : null;
 
@@ -118,6 +120,18 @@ export function ContextMenu({
               </div>
             </>
           )}
+          {grp.canGroup && (
+            <div className="menu-row" onClick={() => { groupSelected(); onClose(); }}>
+              <span className="ico">⊞</span><span style={{ flex: 1 }}>Group</span>
+              <span className="muted" style={{ fontSize: 11 }}>⌘G</span>
+            </div>
+          )}
+          {grp.canUngroup && (
+            <div className="menu-row" onClick={() => { ungroupSelected(); onClose(); }}>
+              <span className="ico">⊟</span><span style={{ flex: 1 }}>Ungroup</span>
+              <span className="muted" style={{ fontSize: 11 }}>⌘⇧G</span>
+            </div>
+          )}
           <div className="menu-row" onClick={copy}>
             <span className="ico">⧉</span><span style={{ flex: 1 }}>Copy</span>
             <span className="muted" style={{ fontSize: 11 }}>⌘C</span>
@@ -136,13 +150,16 @@ export function ContextMenu({
               </div>
             </>
           )}
-          {/* Export just the selection — rare enough to live here, not as
-              always-visible canvas chips on the selection frame. */}
-          <div className="menu-row" onClick={() => { exportSelectionPng(); onClose(); }}>
+          {/* Export just the selection — rare enough to live here (and in the
+              topbar Export menu's "Selection" scope), not as canvas chips. */}
+          <div className="menu-row" onClick={() => { exportPng("selection"); onClose(); }}>
             <span className="ico">▧</span><span style={{ flex: 1 }}>Export selection PNG</span>
           </div>
-          <div className="menu-row" onClick={() => { exportSelectionSvg(); onClose(); }}>
+          <div className="menu-row" onClick={() => { exportSvg("selection"); onClose(); }}>
             <span className="ico">⬡</span><span style={{ flex: 1 }}>Export selection SVG</span>
+          </div>
+          <div className="menu-row" onClick={() => { useAppStore.getState().setGifExportScope("selection"); onClose(); }}>
+            <span className="ico">⬒</span><span style={{ flex: 1 }}>Export selection GIF…</span>
           </div>
           <div className="menu-row" style={{ color: "var(--danger)" }} onClick={remove}>
             <span className="ico">✕</span><span style={{ flex: 1 }}>Delete</span>

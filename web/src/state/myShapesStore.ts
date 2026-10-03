@@ -4,7 +4,8 @@
  * A custom stencil is a normalized FRAGMENT (selected nodes + the edges fully
  * inside the selection, re-based to origin). Stored per browser in
  * localStorage — stencils are a personal palette, not board data.
- * Instantiating stamps fresh ids so repeated drops never collide.
+ * Instantiating goes through diagramStore.insertFragment (fresh ids, z, one
+ * shared group, offset free endpoints) so repeated drops never collide.
  */
 import { create } from "zustand";
 import type { DiagramEdge, DiagramNode } from "../editor-core/diagram";
@@ -103,30 +104,6 @@ export const useMyShapesStore = create<MyShapesState>((set, get) => ({
   instantiate(id, at) {
     const shape = get().shapes.find((s) => s.id === id);
     if (!shape) return;
-    const dx = at.x - shape.w / 2;
-    const dy = at.y - shape.h / 2;
-    const idMap = new Map<string, string>();
-    const nodes = shape.nodes.map((n) => {
-      const nid = mintId();
-      idMap.set(n.id, nid);
-      return { ...n, id: nid, x: n.x + dx, y: n.y + dy };
-    });
-    const edges = shape.edges.map((e) => ({
-      ...e,
-      id: mintId(),
-      source:
-        e.source.kind === "free"
-          ? e.source
-          : { ...e.source, nodeId: idMap.get(e.source.nodeId) ?? e.source.nodeId },
-      target:
-        e.target.kind === "free"
-          ? e.target
-          : { ...e.target, nodeId: idMap.get(e.target.nodeId) ?? e.target.nodeId },
-      waypoints: e.waypoints?.map((p) => ({ x: p.x + dx, y: p.y + dy })),
-    }));
-    const ds = useDiagramStore.getState();
-    ds.setDiagramMode(true);
-    ds.applyPatch({ upsertNodes: nodes, upsertEdges: edges as DiagramEdge[] });
-    ds.setDiagramSelection(nodes.map((n) => n.id));
+    useDiagramStore.getState().insertFragment(shape, at);
   },
 }));

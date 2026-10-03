@@ -7,19 +7,20 @@
  */
 import { useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { esc, screenToContent } from "../../editor-core";
+import { esc } from "../../editor-core";
 import type { DiagramNode } from "../../editor-core/diagram";
 import {
   MiniGlyph,
   SHAPE_SECTIONS,
   STENCIL_LIBRARIES,
   inUseEntries,
-  type PaletteEntry,
+  type PaletteEntry, type PaletteSection
 } from "../diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { useAppStore } from "../../state/appStore";
 import { useMyShapesStore, type MyShape } from "../../state/myShapesStore";
+import { canvasCenterPoint, startFragmentDrag, textGhost } from "../../state/canvasDrop";
 import { useLayers } from "../layers/useLayers";
 import { addImageToBoard } from "./pasteImage";
 
@@ -32,7 +33,7 @@ function loadEnabledLibs(): Set<string> {
   } catch {
     /* fall through */
   }
-  return new Set(["AWS", "Databricks / Data"]); // default = pre-#19 behavior
+  return new Set(["AWS", "GCP", "Azure", "Databricks / Data"]); // the three clouds on by default
 }
 function saveEnabledLibs(libs: Set<string>): void {
   try {
@@ -57,80 +58,32 @@ export function entryInit(entry: PaletteEntry): Partial<DiagramNode> {
 export function addNodeAtCenter(entry: PaletteEntry) {
   const ds = useDiagramStore.getState();
   ds.setDiagramMode(true);
-  const refs = useEditorStore.getState().refs;
-  let at = { x: 200, y: 150 };
-  if (refs) {
-    const r = refs.host.getBoundingClientRect();
-    at = screenToContent(refs.content, r.left + r.width / 2, r.top + r.height / 2);
-  }
+  const at = canvasCenterPoint();
   ds.addNode(entry.kind, at, entryInit(entry));
   useAppStore.getState().setRightTab("props");
 }
 
 /**
- * Pointer-based drag from a palette cell onto the canvas (Lucid-style).
- * A fixed-position ghost follows the cursor; releasing over the canvas host
- * drops the shape exactly there (screen→content via the shared camera).
- * A press without movement still behaves as click-to-add-at-center.
+ * Pointer-based drag from a palette cell onto the canvas (Lucid-style) — the
+ * shared state/canvasDrop gesture: a ghost follows the cursor and releasing
+ * over the canvas drops the shape exactly there; a press without movement
+ * still behaves as click-to-add-at-center.
  */
 export function startShapeDrag(entry: PaletteEntry) {
-  return (e: ReactPointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let ghost: HTMLDivElement | null = null;
-    let moved = false;
-
-    const move = (ev: PointerEvent) => {
-      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
-        moved = true;
-        ghost = document.createElement("div");
-        ghost.className = "shape-ghost";
-        ghost.textContent = entry.glyph;
-        document.body.appendChild(ghost);
-      }
-      if (ghost) {
-        ghost.style.left = `${ev.clientX}px`;
-        ghost.style.top = `${ev.clientY}px`;
-        // highlight the canvas while the drop would land on it
-        const refs = useEditorStore.getState().refs;
-        const over =
-          refs &&
-          (() => {
-            const r = refs.host.getBoundingClientRect();
-            return (
-              ev.clientX >= r.left && ev.clientX <= r.right &&
-              ev.clientY >= r.top && ev.clientY <= r.bottom
-            );
-          })();
-        ghost.classList.toggle("droppable", Boolean(over));
-      }
-    };
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      ghost?.remove();
-      if (!moved) {
-        addNodeAtCenter(entry);
-        return;
-      }
-      const refs = useEditorStore.getState().refs;
-      if (!refs) return;
-      const r = refs.host.getBoundingClientRect();
-      const inside =
-        ev.clientX >= r.left && ev.clientX <= r.right &&
-        ev.clientY >= r.top && ev.clientY <= r.bottom;
-      if (!inside) return;
-      const at = screenToContent(refs.content, ev.clientX, ev.clientY);
-      const ds = useDiagramStore.getState();
-      ds.setDiagramMode(true);
-      ds.addNodeAt(entry.kind, at, entryInit(entry));
-      useAppStore.getState().setRightTab("props");
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+  return (e: ReactPointerEvent) =>
+    startFragmentDrag(e, {
+      ghost: textGhost(entry.glyph),
+      onDrop: (at, dropped) => {
+        if (!dropped) {
+          addNodeAtCenter(entry);
+          return;
+        }
+        const ds = useDiagramStore.getState();
+        ds.setDiagramMode(true);
+        ds.addNodeAt(entry.kind, at, entryInit(entry));
+        useAppStore.getState().setRightTab("props");
+      },
+    });
 }
 
 /** One palette cell — drag onto the board or click to add at center. */
@@ -146,52 +99,17 @@ function ShapeCell({ entry }: { entry: PaletteEntry }) {
   );
 }
 
-/** Drag/click for a "My shapes" stencil — same ghost pattern as startShapeDrag,
+/** Drag/click for a "My shapes" stencil — same gesture as startShapeDrag,
  * but dropping stamps the whole saved fragment (fresh ids) at the point. */
 function startMyShapeDrag(shape: MyShape) {
-  return (e: ReactPointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let ghost: HTMLDivElement | null = null;
-    let moved = false;
-    const place = (clientX: number, clientY: number, fallbackCenter: boolean) => {
-      const refs = useEditorStore.getState().refs;
-      if (!refs) return;
-      const r = refs.host.getBoundingClientRect();
-      const inside =
-        clientX >= r.left && clientX <= r.right &&
-        clientY >= r.top && clientY <= r.bottom;
-      if (!inside && !fallbackCenter) return;
-      const px = inside ? clientX : r.left + r.width / 2;
-      const py = inside ? clientY : r.top + r.height / 2;
-      const at = screenToContent(refs.content, px, py);
-      useMyShapesStore.getState().instantiate(shape.id, at);
-      useAppStore.getState().setRightTab("props");
-    };
-    const move = (ev: PointerEvent) => {
-      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
-        moved = true;
-        ghost = document.createElement("div");
-        ghost.className = "shape-ghost";
-        ghost.textContent = "▣";
-        document.body.appendChild(ghost);
-      }
-      if (ghost) {
-        ghost.style.left = `${ev.clientX}px`;
-        ghost.style.top = `${ev.clientY}px`;
-      }
-    };
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      ghost?.remove();
-      place(ev.clientX, ev.clientY, !moved);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+  return (e: ReactPointerEvent) =>
+    startFragmentDrag(e, {
+      ghost: textGhost("▣"),
+      onDrop: (at) => {
+        useMyShapesStore.getState().instantiate(shape.id, at);
+        useAppStore.getState().setRightTab("props");
+      },
+    });
 }
 
 /** Upload a raster image as an `image`-kind diagram node — behaves like any
@@ -306,10 +224,10 @@ function ShapesTab() {
   // only trims browsing noise, it never hides results you asked for.
   const libSections = new Set(STENCIL_LIBRARIES.map((l) => l.section));
   const inUse = inUseEntries(Object.values(nodes));
-  const sections: { name: string; entries: PaletteEntry[] }[] = [
+  const sections: PaletteSection[] = [
     ...(inUse.length ? [{ name: "In use", entries: inUse }] : []),
     ...SHAPE_SECTIONS.filter(
-      (s) => !libSections.has(s.name) || libs.has(s.name) || q.length > 0,
+      (s) => !libSections.has(s.library ?? s.name) || libs.has(s.library ?? s.name) || q.length > 0,
     ),
   ];
 
@@ -347,6 +265,7 @@ function ShapesTab() {
           <div className="pgroup" key={sec.name}>
             <button className="pgroup-head" onClick={() => setOpen((o) => ({ ...o, [sec.name]: !isOpen }))}>
               <span className="chev">{isOpen ? "▾" : "▸"}</span>
+              {sec.color && <span className="pgroup-dot" style={{ background: sec.color }} />}
               <span className="nm">{sec.name}</span>
               <span className="ct">{entries.length}</span>
             </button>

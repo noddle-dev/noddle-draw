@@ -9,24 +9,24 @@
  *     recolours every node/edge.
  */
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { esc, localName } from "../../editor-core";
 import { SPEED_SLIDER_MAX, speedToSlider, sliderToSpeed } from "../../editor-core/diagram";
-import type { ArrowHead, DiagramNode, EdgeDash, FlowIntensity, FlowSpeed, NodeAnim, NodeKind, NodeStrokeDash, TextAlign } from "../../editor-core/diagram";
+import type { ArrowHead, EdgeDash, FlowIntensity, NodeKind } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { useAppStore } from "../../state/appStore";
+import { usePagesStore } from "../../state/pagesStore";
 import { labelOverflows } from "../diagram/textWrap";
 import {
   EDGE_SWATCHES,
-  FILL_SWATCHES,
-  STROKE_SWATCHES,
   THEMES,
 } from "./data";
 
 // Partial: only the common kinds get a bespoke glyph/label; the rest fall back
 // (◆ / the kind name) — keeps this in sync-free with the expanding NodeKind set.
-const NODE_GLYPH: Partial<Record<NodeKind, string>> = { rect: "▭", rounded: "▢", ellipse: "◯", diamond: "◇", sticky: "▧" };
-const NODE_LABEL: Partial<Record<NodeKind, string>> = { rect: "Rectangle", rounded: "Rounded", ellipse: "Ellipse", diamond: "Diamond", sticky: "Sticky note" };
+const NODE_GLYPH: Partial<Record<NodeKind, string>> = { rect: "▭", rounded: "▢", ellipse: "◯", diamond: "◇", sticky: "▧", text: "T" };
+const NODE_LABEL: Partial<Record<NodeKind, string>> = { rect: "Rectangle", rounded: "Rounded", ellipse: "Ellipse", diamond: "Diamond", sticky: "Sticky note", text: "Text" };
 
 function normColor(c: string): string {
   if (!c || c === "none" || c.startsWith("url")) return "#000000";
@@ -34,24 +34,6 @@ function normColor(c: string): string {
     return c.length === 4 ? "#" + [...c.slice(1)].map((x) => x + x).join("") : c;
   }
   return "#000000";
-}
-
-/** Segmented Slow/Normal/Fast control for the shared FlowSpeed multiplier. */
-function SpeedSeg({ value, onPick }: { value: FlowSpeed; onPick: (v: FlowSpeed) => void }) {
-  const OPTS: { v: FlowSpeed; label: string; title: string }[] = [
-    { v: 0.5, label: "Slow", title: "Slow (0.5×)" },
-    { v: 1, label: "Normal", title: "Normal (1×)" },
-    { v: 2, label: "Fast", title: "Fast (2×)" },
-  ];
-  return (
-    <div className="seg" data-testid="anim-speed">
-      {OPTS.map((o) => (
-        <button key={o.v} className={value === o.v ? "active" : ""} title={o.title} onClick={() => onPick(o.v)}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 /** Effective head: explicit value wins, else derive from the legacy boolean. */
@@ -97,39 +79,10 @@ function DashSeg({ value, onPick }: { value: EdgeDash; onPick: (v: EdgeDash) => 
   );
 }
 
-/** One-click node style presets (fill+stroke), Lucid "Styles" row. */
-const STYLE_PRESETS: { name: string; fill: string; stroke: string; dashed?: boolean }[] = [
-  { name: "Pink", fill: "#fce7f3", stroke: "#ec4899" },
-  { name: "Blue", fill: "#eff6ff", stroke: "#2563eb" },
-  { name: "Purple", fill: "#f4f0ff", stroke: "#7c3aed" },
-  { name: "Yellow", fill: "#fffbeb", stroke: "#d97706" },
-  { name: "Green", fill: "#f0fdf4", stroke: "#16a34a" },
-  { name: "Red", fill: "#fef2f2", stroke: "#dc2626", dashed: true },
-  { name: "Plain", fill: "#ffffff", stroke: "#1a1d23" },
-];
-
-function StylePresets({ fill, stroke, onPick }: { fill?: string; stroke?: string; onPick: (p: { fill: string; stroke: string }) => void }) {
-  return (
-    <div className="style-presets">
-      {STYLE_PRESETS.map((p) => {
-        const selected = (fill ?? "").toLowerCase() === p.fill.toLowerCase() && (stroke ?? "").toLowerCase() === p.stroke.toLowerCase();
-        return (
-          <button
-            key={p.name}
-            className={`style-swatch${selected ? " sel" : ""}`}
-            title={p.name}
-            style={{ background: p.fill, borderColor: p.stroke, borderStyle: p.dashed ? "dashed" : "solid" }}
-            onClick={() => onPick({ fill: p.fill, stroke: p.stroke })}
-          >
-            <span className="bar" style={{ background: p.stroke }} />
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function Swatches({ colors, value, onPick }: { colors: string[]; value: string; onPick: (c: string) => void }) {
+  // Any color outside the preset list is "custom" — the picker well shows it
+  // and stays ring-selected, so a picked color never looks unselected.
+  const isCustom = !colors.some((c) => c.toLowerCase() === value.toLowerCase());
   return (
     <div className="swatches">
       {colors.map((c) => (
@@ -140,60 +93,23 @@ function Swatches({ colors, value, onPick }: { colors: string[]; value: string; 
           onClick={() => onPick(c)}
         />
       ))}
+      <label
+        className={`swatch custom${isCustom ? " sel" : ""}`}
+        title="Custom color…"
+        style={isCustom ? { background: value } : undefined}
+      >
+        <input
+          type="color"
+          value={normColor(value)}
+          aria-label="Custom color"
+          onChange={(e) => onPick(e.target.value)}
+        />
+      </label>
     </div>
   );
 }
 
 /** Dark-leaning palette for label text (default #1a1d23 + accents + white). */
-const TEXT_SWATCHES = ["#1a1d23", "#2563eb", "#7c3aed", "#16a34a", "#d97706", "#dc2626", "#6b7280", "#ffffff"];
-
-/** Segmented left/center/right control for a node label's horizontal alignment. */
-function TextAlignSeg({ value, onPick }: { value: TextAlign; onPick: (v: TextAlign) => void }) {
-  const OPTS: { v: TextAlign; glyph: string; title: string }[] = [
-    { v: "left", glyph: "⇤", title: "Align left" },
-    { v: "center", glyph: "≡", title: "Align center" },
-    { v: "right", glyph: "⇥", title: "Align right" },
-  ];
-  return (
-    <div className="seg">
-      {OPTS.map((o) => (
-        <button key={o.v} className={value === o.v ? "active" : ""} title={o.title} onClick={() => onPick(o.v)}>
-          {o.glyph}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Direct-entry font-size field between the −/+ steppers: type a value,
- * commit on Enter/blur (buffered, so half-typed numbers never clamp mid-key).
- */
-function FontSizeInput({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
-  const [buf, setBuf] = useState(String(value));
-  const [focused, setFocused] = useState(false);
-  useEffect(() => {
-    if (!focused) setBuf(String(value));
-  }, [value, focused]);
-  const commit = () => {
-    const n = Math.round(Number(buf));
-    if (Number.isFinite(n) && n > 0) onCommit(Math.min(200, Math.max(6, n)));
-    else setBuf(String(value));
-  };
-  return (
-    <input
-      className="fs-val fs-input"
-      type="number"
-      min={6}
-      max={200}
-      value={buf}
-      onFocus={() => setFocused(true)}
-      onChange={(e) => setBuf(e.target.value)}
-      onBlur={() => { setFocused(false); commit(); }}
-      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-    />
-  );
-}
 
 /**
  * Text-formatting group (font size stepper + B/I/U toggles + align + color).
@@ -202,80 +118,30 @@ function FontSizeInput({ value, onCommit }: { value: number; onCommit: (n: numbe
  * every selected node). Toggle clicks flip the passed boolean, so in multi mode
  * `bold` = "all bold" and the click sets every node to the opposite.
  */
-function NodeTextGroup({
-  fontSize, bold, italic, underline, textColor, textAlign, wrap, set,
-}: {
-  fontSize: number; bold: boolean; italic: boolean; underline: boolean;
-  textColor: string; textAlign: TextAlign; wrap: boolean;
-  set: (patch: Partial<DiagramNode>) => void;
-}) {
-  const fs = Math.round(fontSize);
-  return (
-    <>
-      <div className="props-label">Text</div>
-      <div className="prop-row">
-        <span className="lbl">Font size</span>
-        <div className="fs-step">
-          <button className="fs-btn" title="Smaller (⌘⇧,)" onClick={() => set({ fontSize: Math.max(6, fs - 1) })}>−</button>
-          <FontSizeInput value={fs} onCommit={(n) => set({ fontSize: n })} />
-          <button className="fs-btn" title="Larger (⌘⇧.)" onClick={() => set({ fontSize: Math.min(200, fs + 1) })}>+</button>
-        </div>
-      </div>
-      <div className="prop-row">
-        <span className="lbl">Format</span>
-        <div className="text-style-btns">
-          <button className={`tsb${bold ? " active" : ""}`} title="Bold" style={{ fontWeight: 700 }} onClick={() => set({ bold: !bold })}>B</button>
-          <button className={`tsb${italic ? " active" : ""}`} title="Italic" style={{ fontStyle: "italic" }} onClick={() => set({ italic: !italic })}>I</button>
-          <button className={`tsb${underline ? " active" : ""}`} title="Underline" style={{ textDecoration: "underline" }} onClick={() => set({ underline: !underline })}>U</button>
-        </div>
-      </div>
-      <div className="prop-row"><span className="lbl">Align</span><TextAlignSeg value={textAlign} onPick={(v) => set({ textAlign: v })} /></div>
-      <div className="prop-row">
-        <span className="lbl">↩ Wrap text</span>
-        <button
-          className={`switch${wrap ? " on" : ""}`}
-          title="Excel-style wrap: long labels break into lines that fit the shape (Enter in the editor always makes a new line)"
-          onClick={() => set({ wrap: !wrap })}
-        >
-          <span className="knob" />
-        </button>
-      </div>
-      <div className="prop-row"><span className="lbl">Text color</span><Swatches colors={TEXT_SWATCHES} value={textColor} onPick={(c) => set({ textColor: c })} /></div>
-    </>
-  );
-}
-
 /**
- * Style additions (opacity slider + optional corner radius + border dash).
- * Same presentational contract as NodeTextGroup — resolved values + a set sink.
+ * Collapsible group — the compact accordion that keeps the inspector short:
+ * only the section being worked in is open, everything else is one line.
+ * Local state on purpose (not per-node): flipping between shapes keeps your
+ * working section open.
  */
-function NodeStyleExtras({
-  opacity, cornerRadius, strokeDash, showCorner, set,
+function Section({
+  title,
+  defaultOpen = false,
+  children,
 }: {
-  opacity: number; cornerRadius: number; strokeDash: NodeStrokeDash; showCorner: boolean;
-  set: (patch: Partial<DiagramNode>) => void;
+  title: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <>
-      <div className="prop-row">
-        <span className="lbl">Opacity</span>
-        <div className="with-num">
-          <input type="range" min={0} max={1} step={0.05} value={opacity} onChange={(e) => set({ opacity: +e.target.value })} />
-          <span className="num">{Math.round(opacity * 100)}%</span>
-        </div>
-      </div>
-      {showCorner && (
-        <div className="prop-row">
-          <span className="lbl">Corner radius</span>
-          <div className="with-num">
-            <input type="range" min={0} max={40} step={1} value={cornerRadius} onChange={(e) => set({ cornerRadius: +e.target.value })} />
-            <span className="num">{cornerRadius}</span>
-          </div>
-        </div>
-      )}
-      <div className="props-label">Border dash</div>
-      <DashSeg value={strokeDash} onPick={(d) => set({ strokeDash: d })} />
-    </>
+    <div className={`prop-sec${open ? " open" : ""}`}>
+      <button type="button" className="prop-sec-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        {title}
+      </button>
+      {open && <div className="prop-sec-body">{children}</div>}
+    </div>
   );
 }
 
@@ -327,126 +193,73 @@ function NumField({
 }
 
 /* ---------- diagram node ---------- */
+/** Hint pointing at the left style panel — the ONE place for colours,
+ * strokes, text style, animation, layers and actions (no duplicates here). */
+function StyleHint() {
+  return (
+    <div className="prop-hint props-style-hint">
+      Colours, stroke, text style, animation and layers are in the style panel on the left.
+    </div>
+  );
+}
+
+/* ---------- one diagram node ----------
+ * Only what the left style panel does NOT have: the name, exact
+ * position/size and text wrapping. Everything else lives on the left. */
 function NodeProps({ id }: { id: string }) {
   const node = useDiagramStore((s) => s.nodes[id]);
   const updateNode = useDiagramStore((s) => s.updateNode);
-  const addNode = useDiagramStore((s) => s.addNode);
-  const deleteSelected = useDiagramStore((s) => s.deleteSelectedDiagram);
   const setDiagramSelection = useDiagramStore((s) => s.setDiagramSelection);
   const setRightTab = useAppStore((s) => s.setRightTab);
   if (!node) return null;
-
-  const duplicate = () => {
-    const newId = addNode(node.kind, { x: node.x + node.w / 2 + 30, y: node.y + node.h / 2 + 30 });
-    useDiagramStore.getState().updateNode(newId, {
-      text: node.text + " copy", fill: node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth, w: node.w, h: node.h,
-    });
-  };
+  const isInk = node.kind === "freedraw";
 
   return (
     <div className="props2">
       <div className="props-head">
-        <span className="g" style={{ background: node.fill, color: node.stroke }}>{NODE_GLYPH[node.kind] ?? "◆"}</span>
+        <span className="g" style={{ background: isInk ? "#f1f0ff" : node.fill, color: node.stroke }}>{NODE_GLYPH[node.kind] ?? "◆"}</span>
         <div className="body">
-          <input className="props-name" value={node.text} onChange={(e) => updateNode(id, { text: e.target.value })} />
-          <div className="props-type">{NODE_LABEL[node.kind] ?? node.kind}</div>
+          {isInk ? (
+            <div className="props-name" style={{ fontWeight: 600 }}>Pen stroke</div>
+          ) : (
+            <input className="props-name" value={node.text} placeholder="Label" onChange={(e) => updateNode(id, { text: e.target.value })} />
+          )}
+          <div className="props-type">{isInk ? "freehand ink" : NODE_LABEL[node.kind] ?? node.kind}</div>
         </div>
-        <button className="props-close" onClick={() => setDiagramSelection([])}>✕</button>
+        <button className="props-close" aria-label="Deselect" onClick={() => setDiagramSelection([])}>✕</button>
       </div>
 
-      <div className="props-label">Position &amp; size</div>
-      <div className="xy-grid">
-        <NumField label="X" value={node.x} onCommit={(n) => updateNode(id, { x: n })} />
-        <NumField label="Y" value={node.y} onCommit={(n) => updateNode(id, { y: n })} />
-        <NumField label="W" value={node.w} min={20} onCommit={(n) => updateNode(id, { w: n })} />
-        <NumField label="H" value={node.h} min={20} onCommit={(n) => updateNode(id, { h: n })} />
-        <NumField
-          label="∠°"
-          value={node.rotation ?? 0}
-          onCommit={(n) => {
-            const deg = ((n % 360) + 360) % 360;
-            updateNode(id, { rotation: deg === 0 ? undefined : deg });
-          }}
-        />
-      </div>
-
-      <div className="props-label">Styles</div>
-      <StylePresets fill={node.fill} stroke={node.stroke} onPick={(p) => updateNode(id, p)} />
-      <div className="prop-row" style={{ marginTop: 10 }}><span className="lbl">Fill</span><Swatches colors={FILL_SWATCHES} value={node.fill} onPick={(c) => updateNode(id, { fill: c })} /></div>
-      <div className="prop-row"><span className="lbl">Border</span><Swatches colors={STROKE_SWATCHES} value={node.stroke} onPick={(c) => updateNode(id, { stroke: c })} /></div>
-      <div className="prop-row">
-        <span className="lbl">Border width</span>
-        <div className="with-num">
-          <input type="range" min={0} max={6} step={0.5} value={node.strokeWidth} onChange={(e) => updateNode(id, { strokeWidth: +e.target.value })} />
-          <span className="num">{node.strokeWidth}</span>
+      <Section title="Position & size" defaultOpen>
+        <div className="xy-grid">
+          <NumField label="X" value={node.x} onCommit={(n) => updateNode(id, { x: n })} />
+          <NumField label="Y" value={node.y} onCommit={(n) => updateNode(id, { y: n })} />
+          <NumField label="W" value={node.w} min={isInk ? 4 : 20} onCommit={(n) => updateNode(id, { w: n })} />
+          <NumField label="H" value={node.h} min={isInk ? 4 : 20} onCommit={(n) => updateNode(id, { h: n })} />
+          {/* OSS: shapes rotate around their centre (drag the ⟳ handle, or type). */}
+          <NumField
+            label="∠°"
+            value={node.rotation ?? 0}
+            onCommit={(n) => {
+              const deg = ((n % 360) + 360) % 360;
+              updateNode(id, { rotation: deg === 0 ? undefined : deg });
+            }}
+          />
         </div>
-      </div>
-      <NodeStyleExtras
-        opacity={node.opacity ?? 1}
-        cornerRadius={node.cornerRadius ?? (node.kind === "rounded" ? 8 : 0)}
-        strokeDash={node.strokeDash ?? "solid"}
-        showCorner={node.kind === "rect" || node.kind === "rounded"}
-        set={(patch) => updateNode(id, patch)}
-      />
+      </Section>
 
-      <NodeTextGroup
-        fontSize={node.fontSize ?? 14}
-        bold={!!node.bold}
-        italic={!!node.italic}
-        underline={!!node.underline}
-        textColor={node.textColor ?? "#1a1d23"}
-        textAlign={node.textAlign ?? "center"}
-        wrap={!!node.wrap}
-        set={(patch) => updateNode(id, patch)}
-      />
-      {!node.wrap && labelOverflows(node) && (
-        <div className="prop-hint">
-          Text overflows the shape —{" "}
-          <button className="btn btn-ghost" onClick={() => updateNode(id, { wrap: true })}>
-            ↩ Wrap text
+      {!isInk && (
+        <div className="prop-row">
+          <span className="lbl" title="Excel-style wrap: long labels break into lines that fit the shape">Wrap text</span>
+          <button className={`switch${node.wrap ? " on" : ""}`} onClick={() => updateNode(id, { wrap: !node.wrap })}>
+            <span className="knob" />
           </button>
         </div>
       )}
-
-      <div className="props-label">Animation</div>
-      <div className="seg" data-testid="node-anim">
-        {([undefined, "pulse", "glow", "breathe", "wobble"] as (NodeAnim | undefined)[]).map((a) => (
-          <button
-            key={a ?? "none"}
-            className={(node.anim ?? undefined) === a ? "active" : ""}
-            title={
-              a
-                ? { pulse: "Rhythmic scale up/down", glow: "Breathing glow", breathe: "Steady fade", wobble: "Gentle wobble" }[a]
-                : "No animation"
-            }
-            onClick={() => updateNode(id, { anim: a })}
-          >
-            {a ? a.charAt(0).toUpperCase() + a.slice(1) : "None"}
-          </button>
-        ))}
-      </div>
-      {node.anim && (
-        <>
-          <div className="props-label">Speed</div>
-          <SpeedSeg value={node.animSpeed ?? 1} onPick={(v) => updateNode(id, { animSpeed: v })} />
-        </>
+      {!isInk && !node.wrap && labelOverflows(node) && (
+        <div className="prop-hint">Text overflows the shape — turn on Wrap text.</div>
       )}
 
-      <div className="prop-row">
-        <span className="lbl">✎ Hand-drawn stroke (sketch)</span>
-        <button
-          className={`switch${node.sketch ? " on" : ""}`}
-          onClick={() => updateNode(id, { sketch: !node.sketch })}
-        >
-          <span className="knob" />
-        </button>
-      </div>
-
-      <div className="props-label" style={{ marginTop: 4 }}>Arrange</div>
-      <div className="arrange">
-        <button className="btn" onClick={duplicate}>⧉ Duplicate</button>
-        <button className="btn btn-danger" onClick={deleteSelected}>✕ Delete</button>
-      </div>
+      <StyleHint />
 
       <div className="ask-claude" onClick={() => setRightTab("claude")}>
         <span className="spark">✦</span>
@@ -459,7 +272,13 @@ function NodeProps({ id }: { id: string }) {
 /* ---------- diagram edge ---------- */
 function EdgeProps({ id }: { id: string }) {
   const edge = useDiagramStore((s) => s.edges[id]);
-  const updateEdge = useDiagramStore((s) => s.updateEdge);
+  const updateEdge0 = useDiagramStore((s) => s.updateEdge);
+  // Style edits are REMEMBERED — the next drawn arrow is born with them
+  // (editorStore.edgeStyle keeps only style fields; labels/z never stick).
+  const updateEdge = (eid: string, patch: Parameters<typeof updateEdge0>[1]) => {
+    updateEdge0(eid, patch);
+    useEditorStore.getState().setEdgeStyle(patch);
+  };
   const setEdgeLabel = useDiagramStore((s) => s.setEdgeLabel);
   const toggleAnimated = useDiagramStore((s) => s.toggleEdgeAnimated);
   const deleteSelected = useDiagramStore((s) => s.deleteSelectedDiagram);
@@ -479,9 +298,9 @@ function EdgeProps({ id }: { id: string }) {
       </div>
 
       <div className="props-label">Label</div>
-      <input className="text-input" style={{ marginBottom: 16 }} placeholder="Add label…" value={edge.label ?? ""} onChange={(e) => setEdgeLabel(id, e.target.value)} />
+      <input className="text-input" style={{ marginBottom: 12 }} placeholder="Add label…" value={edge.label ?? ""} onChange={(e) => setEdgeLabel(id, e.target.value)} />
 
-      <div className="props-label">Line style</div>
+      <Section title="Line" defaultOpen>
       <div className="seg">
         <button className={edge.routing === "straight" ? "active" : ""} onClick={() => updateEdge(id, { routing: "straight" })}>Straight</button>
         <button className={edge.routing === "elbow" ? "active" : ""} onClick={() => updateEdge(id, { routing: "elbow" })}>Elbow</button>
@@ -559,7 +378,9 @@ function EdgeProps({ id }: { id: string }) {
 
       <div className="props-label">Dash</div>
       <DashSeg value={edge.dash ?? "solid"} onPick={(d) => updateEdge(id, { dash: d })} />
+      </Section>
 
+      <Section title="Endpoints">
       <div className="props-label">Start head</div>
       <HeadSeg
         value={endpointHead(edge.startHead, edge.startArrow)}
@@ -570,6 +391,7 @@ function EdgeProps({ id }: { id: string }) {
         value={endpointHead(edge.endHead, edge.endArrow)}
         onPick={(h) => updateEdge(id, { endHead: h, endArrow: h !== "none" })}
       />
+      </Section>
 
       <button className="btn btn-danger btn-block" style={{ margin: "8px 0 14px" }} onClick={deleteSelected}>✕ Delete connector</button>
       <div className="ask-claude" onClick={() => setRightTab("claude")}>
@@ -641,7 +463,36 @@ function SvgObjectProps() {
   );
 }
 
-/* ---------- no selection: page settings ---------- */
+/* ---------- no selection: board overview + page settings ---------- */
+
+/** Doodle spot art for the empty state — sketchy shapes + a cursor, in the
+ * house ember/ink palette (inline SVG per the no-glossy-icons rule). */
+function BoardDoodle() {
+  return (
+    <svg viewBox="0 0 96 60" width="96" height="60" fill="none" aria-hidden="true">
+      <rect x="8" y="12" width="30" height="20" rx="4" stroke="#2d3142" strokeWidth="1.8" />
+      <ellipse cx="70" cy="20" rx="15" ry="10" stroke="#eb6c36" strokeWidth="1.8" />
+      <path d="M38 22 C48 22, 48 20, 55 20" stroke="#4f5d75" strokeWidth="1.6" strokeDasharray="3 3" />
+      <path d="M22 40 q 14 12 34 2" stroke="#4f5d75" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M62 38 L74 52 L67 51 L70 58" stroke="#2d3142" strokeWidth="1.8" strokeLinejoin="round" fill="#fff" />
+    </svg>
+  );
+}
+
+/** One shortcut row for the cheat-sheet. */
+function Kbd({ keys, label }: { keys: string; label: string }) {
+  return (
+    <div className="kbd-row">
+      <span className="kbd-keys">
+        {keys.split(" ").map((k) => (
+          <kbd key={k}>{k}</kbd>
+        ))}
+      </span>
+      <span className="kbd-what">{label}</span>
+    </div>
+  );
+}
+
 function PageSettings() {
   const gridOn = useAppStore((s) => s.gridOn);
   const snapOn = useAppStore((s) => s.snapOn);
@@ -652,6 +503,7 @@ function PageSettings() {
   const nodes = useDiagramStore((s) => s.nodes);
   const edges = useDiagramStore((s) => s.edges);
   const autoRouteAllEdges = useDiagramStore((s) => s.autoRouteAllEdges);
+  const pageCount = usePagesStore((s) => s.pages.length);
   const edgeCount = Object.keys(edges).length;
 
   const applyTheme = (themeId: string) => {
@@ -662,9 +514,22 @@ function PageSettings() {
     Object.keys(edges).forEach((id) => ds.updateEdge(id, { stroke: t.stroke }));
   };
 
+  const nodeCount = Object.keys(nodes).length;
+
   return (
     <div className="props2">
-      <div className="props-empty">Select a shape or connector on the canvas — or in Layers — to edit its properties.</div>
+      {/* Board overview — a warm hello instead of the old dashed scold. */}
+      <div className="board-hello">
+        <BoardDoodle />
+        <div className="t">Nothing selected</div>
+        <div className="d">Click a shape to style it — meanwhile, here's your board.</div>
+        <div className="stat-chips">
+          <span className="stat"><b>{nodeCount}</b> shapes</span>
+          <span className="stat"><b>{edgeCount}</b> connectors</span>
+          <span className="stat"><b>{pageCount}</b> {pageCount === 1 ? "page" : "pages"}</span>
+        </div>
+      </div>
+
       <div className="props-label">Page</div>
       <div className="prop-row">
         <span className="lbl">Show grid</span>
@@ -692,13 +557,33 @@ function PageSettings() {
           </button>
         </>
       )}
+
       <div className="props-label" style={{ marginTop: 8 }}>Diagram theme</div>
-      {THEMES.map((th) => (
-        <button key={th.id} className="theme-row" onClick={() => applyTheme(th.id)}>
-          <span className="sw" style={{ background: th.swatch }} />
-          <span className="nm">{th.name}</span>
-        </button>
-      ))}
+      <div className="theme-grid">
+        {THEMES.map((th) => (
+          <button
+            key={th.id}
+            className="theme-card"
+            title={`Recolor every shape with the ${th.name} palette`}
+            onClick={() => applyTheme(th.id)}
+          >
+            <span className="sw" style={{ background: th.swatch }} />
+            <span className="nm">{th.name}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="props-label" style={{ marginTop: 8 }}>Shortcuts</div>
+      <div className="kbd-sheet">
+        <Kbd keys="V" label="Select" />
+        <Kbd keys="H" label="Pan" />
+        <Kbd keys="1–9" label="Tools (island)" />
+        <Kbd keys="⌘Z" label="Undo" />
+        <Kbd keys="⌘0" label="Fit to view" />
+        <Kbd keys="Del" label="Delete selection" />
+        <Kbd keys="Space drag" label="Pan the canvas" />
+        <Kbd keys="⌘V" label="Paste an image" />
+      </div>
     </div>
   );
 }
@@ -708,67 +593,14 @@ function MultiSelectProps({ ids }: { ids: string[] }) {
   const nodes = useDiagramStore((s) => s.nodes);
   const edges = useDiagramStore((s) => s.edges);
   const setDiagramSelection = useDiagramStore((s) => s.setDiagramSelection);
-
   const selNodes = ids.filter((id) => nodes[id]);
   const selEdges = ids.filter((id) => edges[id]);
-
-  // Apply a fill/stroke to every selected object (edges take stroke only).
-  const applyStyle = (p: { fill: string; stroke: string }) => {
-    const ds = useDiagramStore.getState();
-    selNodes.forEach((id) => ds.updateNode(id, p));
-    selEdges.forEach((id) => ds.updateEdge(id, { stroke: p.stroke }));
-  };
-  const applyFill = (c: string) => {
-    const ds = useDiagramStore.getState();
-    selNodes.forEach((id) => ds.updateNode(id, { fill: c }));
-  };
-  const applyStroke = (c: string) => {
-    const ds = useDiagramStore.getState();
-    selNodes.forEach((id) => ds.updateNode(id, { stroke: c }));
-    selEdges.forEach((id) => ds.updateEdge(id, { stroke: c }));
-  };
-
-  // Show the shared value only when every object agrees (else "mixed" → blank).
-  const common = <T,>(vals: T[]): T | undefined =>
-    vals.length && vals.every((v) => v === vals[0]) ? vals[0] : undefined;
-  const commonFill = common(selNodes.map((id) => nodes[id].fill));
-  const commonStroke = common([
-    ...selNodes.map((id) => nodes[id].stroke),
-    ...selEdges.map((id) => edges[id].stroke),
-  ]);
-
-  // Node text/style formatting applied to EVERY selected node (edges ignore it).
-  const setAllNodes = (patch: Partial<DiagramNode>) => {
-    const ds = useDiagramStore.getState();
-    selNodes.forEach((id) => ds.updateNode(id, patch));
-  };
-  // "All-agree" resolution so a shared value shows and mixed values fall back to
-  // the default (never silently rewriting the majority when nothing was touched).
-  const commonFontSize = common(selNodes.map((id) => nodes[id].fontSize ?? 14)) ?? 14;
-  const commonTextColor = common(selNodes.map((id) => nodes[id].textColor ?? "#1a1d23")) ?? "";
-  const commonAlign = common(selNodes.map((id) => nodes[id].textAlign ?? "center")) ?? "center";
-  const commonOpacity = common(selNodes.map((id) => nodes[id].opacity ?? 1)) ?? 1;
-  const commonCorner = common(selNodes.map((id) => nodes[id].cornerRadius ?? (nodes[id].kind === "rounded" ? 8 : 0))) ?? 0;
-  const commonDash = common(selNodes.map((id) => nodes[id].strokeDash ?? "solid")) ?? "solid";
-  const allBold = selNodes.length > 0 && selNodes.every((id) => nodes[id].bold);
-  const allItalic = selNodes.length > 0 && selNodes.every((id) => nodes[id].italic);
-  const allUnderline = selNodes.length > 0 && selNodes.every((id) => nodes[id].underline);
-  const allWrap = selNodes.length > 0 && selNodes.every((id) => nodes[id].wrap);
-  const allRoundable = selNodes.length > 0 && selNodes.every((id) => nodes[id].kind === "rect" || nodes[id].kind === "rounded");
-
-  // Sketch is a node-only flag. "On" when every selected node already sketches;
-  // clicking flips the whole selection to the opposite of that state.
-  const allSketch = selNodes.length > 0 && selNodes.every((id) => nodes[id].sketch);
-  const toggleSketch = () => {
-    const ds = useDiagramStore.getState();
-    selNodes.forEach((id) => ds.updateNode(id, { sketch: !allSketch }));
-  };
-
-  // "Ungroup" when every selected node already shares one group.
   const allGrouped =
     selNodes.length > 1 &&
     !!nodes[selNodes[0]].groupId &&
     selNodes.every((id) => nodes[id].groupId === nodes[selNodes[0]].groupId);
+  const allWrap = selNodes.length > 0 && selNodes.every((id) => nodes[id].wrap);
+  const texty = selNodes.filter((id) => nodes[id].kind !== "freedraw");
 
   return (
     <div className="props2">
@@ -781,87 +613,26 @@ function MultiSelectProps({ ids }: { ids: string[] }) {
             {allGrouped ? " · grouped" : ""}
           </div>
         </div>
-        <button className="props-close" onClick={() => setDiagramSelection([])}>✕</button>
+        <button className="props-close" aria-label="Deselect" onClick={() => setDiagramSelection([])}>✕</button>
       </div>
-
-      {selNodes.length > 1 && (
-        <>
-          <div className="props-label">Align shapes</div>
-          <div className="seg align-seg" data-testid="align-h">
-            <button title="Align left edges" onClick={() => useDiagramStore.getState().alignSelection("left")}>⇤</button>
-            <button title="Align horizontal centers" onClick={() => useDiagramStore.getState().alignSelection("centerH")}>⇹</button>
-            <button title="Align right edges" onClick={() => useDiagramStore.getState().alignSelection("right")}>⇥</button>
-            <button title="Align top edges" onClick={() => useDiagramStore.getState().alignSelection("top")}>⤒</button>
-            <button title="Align vertical middles" onClick={() => useDiagramStore.getState().alignSelection("middleV")}>⇳</button>
-            <button title="Align bottom edges" onClick={() => useDiagramStore.getState().alignSelection("bottom")}>⤓</button>
-          </div>
-          {selNodes.length > 2 && (
-            <div className="seg align-seg" data-testid="align-dist">
-              <button title="Distribute evenly, left to right" onClick={() => useDiagramStore.getState().alignSelection("distH")}>⋯ Even ↔</button>
-              <button title="Distribute evenly, top to bottom" onClick={() => useDiagramStore.getState().alignSelection("distV")}>⋮ Even ↕</button>
-            </div>
-          )}
-        </>
-      )}
-
-      {selNodes.length > 1 && (
+      {texty.length > 0 && (
         <div className="prop-row">
-          <span className="lbl">Group</span>
-          {allGrouped ? (
-            <button
-              className="btn"
-              title="Ungroup (⌘⇧G) — the shapes select and move independently again"
-              onClick={() => useDiagramStore.getState().ungroupSelection()}
-            >
-              Ungroup
-            </button>
-          ) : (
-            <button
-              className="btn"
-              title="Group (⌘G) — clicking any member selects and drags the whole group"
-              onClick={() => useDiagramStore.getState().groupSelection()}
-            >
-              ⧉ Group
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="props-label">Styles</div>
-      <StylePresets fill={commonFill} stroke={commonStroke} onPick={applyStyle} />
-      <div className="prop-row" style={{ marginTop: 10 }}><span className="lbl">Fill</span><Swatches colors={FILL_SWATCHES} value={commonFill ?? ""} onPick={applyFill} /></div>
-      <div className="prop-row"><span className="lbl">Border</span><Swatches colors={STROKE_SWATCHES} value={commonStroke ?? ""} onPick={applyStroke} /></div>
-
-      {selNodes.length > 0 && (
-        <>
-          <NodeStyleExtras
-            opacity={commonOpacity}
-            cornerRadius={commonCorner}
-            strokeDash={commonDash as NodeStrokeDash}
-            showCorner={allRoundable}
-            set={setAllNodes}
-          />
-          <NodeTextGroup
-            fontSize={commonFontSize}
-            bold={allBold}
-            italic={allItalic}
-            underline={allUnderline}
-            textColor={commonTextColor}
-            textAlign={commonAlign as TextAlign}
-            wrap={allWrap}
-            set={setAllNodes}
-          />
-        </>
-      )}
-
-      {selNodes.length > 0 && (
-        <div className="prop-row">
-          <span className="lbl">✎ Hand-drawn stroke (sketch)</span>
-          <button className={`switch${allSketch ? " on" : ""}`} onClick={toggleSketch}>
+          <span className="lbl">Wrap text</span>
+          <button
+            className={`switch${allWrap ? " on" : ""}`}
+            onClick={() => {
+              const ds = useDiagramStore.getState();
+              texty.forEach((id) => ds.updateNode(id, { wrap: !allWrap }));
+            }}
+          >
             <span className="knob" />
           </button>
         </div>
       )}
+      <div className="prop-hint props-style-hint">
+        Style, align, distribute, group, layers and flip are in the style panel on the left.
+        Drag a corner of the selection frame to scale everything together.
+      </div>
     </div>
   );
 }

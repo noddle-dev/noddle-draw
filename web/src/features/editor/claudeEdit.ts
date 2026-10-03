@@ -16,7 +16,7 @@ import { commitHistoryNow } from "../../state/diagramHistory";
 import { useDiagramStore } from "../../state/diagramStore";
 import { useEditorStore } from "../../state/editorStore";
 import { usePagesStore } from "../../state/pagesStore";
-import { recordAiCheckpoint } from "./aiCheckpoints";
+import { recordAiCheckpoint, rollbackAiCheckpoint } from "./aiCheckpoints";
 
 function errText(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -185,6 +185,21 @@ function transcriptOf(docId: string | null, sessionId: string): Turn[] {
 
 function syncQueueCount() {
   useAppStore.setState({ queuedChats: queue.length });
+}
+
+/** Roll the board back to before the AI edit behind `cpId` (and every AI edit
+ * after it), then report the outcome in the chat. Shared by the chat panel
+ * and Simple mode's status strip. */
+export function rollbackAiEdit(docId: string | null, cpId: string): void {
+  const r = rollbackAiCheckpoint(docId, cpId);
+  useAppStore.getState().pushChat(docId, {
+    who: "ai",
+    text: r.ok
+      ? `Rolled back ${r.reverted} AI edit${r.reverted === 1 ? "" : "s"}. (⌘Z undoes the rollback.)`
+      : r.reason === "wrong-page"
+        ? "That edit was made on another page — switch back to it to roll back."
+        : "That rollback point is no longer available (max 20 are kept, and they reset on reload).",
+  });
 }
 
 /** Enqueue a chat message. Returns immediately; the drain loop does the work.

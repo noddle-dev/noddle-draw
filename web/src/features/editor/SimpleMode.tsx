@@ -1,38 +1,44 @@
 /**
- * features/editor/SimpleMode — the "Simple" editor chrome (appStore.uiMode).
+ * features/editor/SimpleMode — the editor chrome (the only one since the Full
+ * docked layout was retired; the name and `.editor.simple` CSS stayed).
  *
  * Excalidraw-style spatial hierarchy over the UNCHANGED canvas engine:
- *   • top-left     — ☰ menu island (new board, templates, save, export,
- *                    present, → Full UI) + read-only board title;
- *   • top-center   — floating tool island: the essential shapes (click to arm
- *                    the draw tool — drag on the canvas sizes the shape)
- *                    plus ⋯ which opens the full Shapes/Layers panel floating;
- *   • top-right    — presence avatars, Share, and a toggle for the floating
- *                    Properties/AI panel;
+ *   • top-left     — ☰ File menu island (board, export, view, present…)
+ *                    + renamable board title (view-only tag);
+ *   • top-center   — floating tool island: the essential shapes (click to add,
+ *                    drag to place — same startShapeDrag as the full palette)
+ *                    plus the Library browser (L) and ⋯ which opens the
+ *                    full Shapes/Layers panel floating;
+ *   • top-right    — presence avatars, comment tool, Share, and a toggle for
+ *                    the floating Properties/AI panel;
  *   • bottom-left  — zoom island (−/%/+, % fits) + undo/redo island. The
  *                    canvas's own bottom-right zoom widget is CSS-hidden.
- * EditorScreen mounts this INSTEAD of EditorTopbar/LeftPanel/RightPanel, so
- * Full mode renders exactly what it always did.
+ * EditorScreen mounts this over the canvas (never in embeds/present mode).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramHistory } from "../../state/diagramHistory";
-import { onCollabName } from "../../state/collabStore";
+import { broadcastName, onCollabName } from "../../state/collabStore";
+import { api } from "../../shared/api/client";
 import { SHAPE_SECTIONS, MiniGlyph, type PaletteEntry } from "../diagram";
-import { useExport } from "../toolbar/useExport";
 import { Icon } from "../../shared/ui";
 import { entryInit, LeftPanel } from "./LeftPanel";
 import { useDiagramStore } from "../../state/diagramStore";
-import { ShareDialog, Presence } from "./EditorTopbar";
-import { UiModeSwitch } from "./UiModeSwitch";
-import { DrawStylePanel } from "./DrawStylePanel";
-import { RightPanel } from "./RightPanel";
+import { useCommentsStore } from "../../state/commentsStore";
+import { ShareDialog } from "./ShareDialog";
 import { TemplatesModal } from "../templates/TemplatesModal";
-import { createBoard } from "../templates/templates";
+import { Presence } from "./Presence";
+import { DrawStylePanel } from "./DrawStylePanel";
+import { SimpleFileMenu } from "./SimpleFileMenu";
+import { HistoryPanel } from "./HistoryPanel";
+import { RightPanel } from "./RightPanel";
+import { LibraryPanel } from "../library";
+import { copyPngToClipboard } from "../toolbar/useExport";
+import { ShortcutsDialog } from "./ShortcutsDialog";
 
-/** One island slot: a MODE (select cursor / draw-arrow / pen …) or a shape to add. */
-type IslandMode = "select" | "arrow" | "pen" | "eraser" | "laser";
+/** One island slot: a MODE (select cursor / draw-arrow) or a shape to add. */
+type IslandMode = "select" | "arrow" | "text" | "pan" | "pen" | "eraser" | "laser";
 type IslandItem = (
   | { kind: "mode"; mode: IslandMode; label: string; letter?: string }
   | { kind: "shape"; entry: PaletteEntry; letter?: string }
@@ -43,30 +49,27 @@ type IslandItem = (
 };
 
 /**
- * The island, in Excalidraw's digit order: 1 select, 2 rectangle, 3 diamond,
- * 4 ellipse, 5 arrow — then noddle's extras (rounded/note/sticky). Everything
- * else stays reachable through ⋯ (the full Shapes/Layers panel). P pen,
- * E eraser and K laser follow as letter-only extras.
+ * The island: H hand, 1 select, 2 rectangle, 3 TEXT (the most-used tool after
+ * boxes), 4 ellipse, 5 arrow, 6 diamond, then P pen, E eraser and K laser.
+ * Rounded / note / sticky are not on the island — they live in ⋯ (Shapes
+ * panel) and the Library. Same order and keys as the commercial edition.
  */
 const ISLAND: IslandItem[] = (() => {
   const section = (name: string) =>
     SHAPE_SECTIONS.find((s) => s.name === name)?.entries ?? [];
   const basic = section("Basic");
   const byKind = (k: string) => basic.find((e) => e.kind === k);
-  const note = section("Flowchart").find((e) => e.kind === "note");
-  const sticky = section("Sticky notes")[0];
-  const items: (IslandItem | null | undefined)[] = [
+  const core: (IslandItem | null | undefined)[] = [
     { kind: "mode", mode: "select", label: "Select", letter: "v" },
     byKind("rect") && { kind: "shape", entry: byKind("rect")!, letter: "r" },
-    byKind("diamond") && { kind: "shape", entry: byKind("diamond")!, letter: "d" },
+    { kind: "mode", mode: "text", label: "Text", letter: "t" },
     byKind("ellipse") && { kind: "shape", entry: byKind("ellipse")!, letter: "o" },
     { kind: "mode", mode: "arrow", label: "Arrow", letter: "a" },
-    byKind("rounded") && { kind: "shape", entry: byKind("rounded")! },
-    note && { kind: "shape", entry: note, letter: "n" },
-    sticky && { kind: "shape", entry: sticky, letter: "s" },
+    byKind("diamond") && { kind: "shape", entry: byKind("diamond")!, letter: "d" },
   ];
-  const numbered = (items.filter(Boolean) as IslandItem[]).map((t, i) => ({ ...t, digit: i + 1 }));
+  const numbered = (core.filter(Boolean) as IslandItem[]).map((t, i) => ({ ...t, digit: i + 1 }));
   return [
+    { kind: "mode", mode: "pan", label: "Hand", letter: "h" },
     ...numbered,
     { kind: "mode", mode: "pen", label: "Pen", letter: "p" },
     { kind: "mode", mode: "eraser", label: "Eraser", letter: "e" },
@@ -98,15 +101,24 @@ const cornerKey = (i: number): string => {
 
 const MODE_TITLES: Record<IslandMode, string> = {
   select: "the normal cursor",
-  arrow: "drag from any shape to draw a connector",
+  text: "click the canvas to type a label",
+  arrow: "drag from a shape or empty canvas to draw an arrow",
+  pan: "drag to move around the board (or hold Space)",
   pen: "draw freehand",
   eraser: "sweep over objects to erase them",
   laser: "point at things — the trail fades, nothing is saved",
 };
 
-/** Doodle-style inline glyphs for the two mode slots (no emoji per repo rule). */
+/** Doodle-style inline glyphs for the mode slots (no emoji per repo rule). */
 function ModeGlyph({ mode }: { mode: IslandMode }) {
   const P = { viewBox: "0 0 24 24", width: 18, height: 18, fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (mode === "pan") {
+    return (
+      <svg {...P}>
+        <path d="M8 12.5 V6.5 C8 5.4, 9.8 5.4, 9.8 6.5 V11.5 M9.8 6 V4.8 C9.8 3.7, 11.6 3.7, 11.6 4.8 V11 M11.6 5.4 C11.6 4.3, 13.4 4.3, 13.4 5.4 V11.2 M13.4 7 C13.4 5.9, 15.2 5.9, 15.2 7 V13.5 C15.2 17.5, 13 19.6, 10.6 19.6 C8.4 19.6, 7.1 18.4, 5.8 16.2 L4.4 13.6 C3.9 12.6, 5.3 11.8, 6 12.6 L8 14.6" />
+      </svg>
+    );
+  }
   if (mode === "pen") {
     return (
       <svg {...P}>
@@ -130,6 +142,15 @@ function ModeGlyph({ mode }: { mode: IslandMode }) {
       </svg>
     );
   }
+  if (mode === "text") {
+    return (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+        <path d="M5.2 6.4 C9 5.8, 15 5.9, 18.8 6.3" />
+        <path d="M12.1 6.2 C11.9 10.5, 12.2 15, 11.9 19.2" />
+        <path d="M9.4 19.3 C10.9 19.1, 13.2 19.2, 14.6 19.4" />
+      </svg>
+    );
+  }
   return mode === "select" ? (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
       <path d="M6 3.5 L18.5 12 L12.5 13.2 L15.5 19.5 L13 20.6 L10.2 14.2 L6 17.5 Z" />
@@ -138,6 +159,30 @@ function ModeGlyph({ mode }: { mode: IslandMode }) {
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 20 C9 17, 14 11, 19 6" />
       <path d="M13.5 5.5 L19 6 L18.5 11.5" />
+    </svg>
+  );
+}
+
+/** Doodle book-of-shapes for the Library slot (hand-drawn, no emoji). */
+function LibraryGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4.4 5.2 C7.4 4.6, 10 5, 12 6.4 C14 5, 16.6 4.6, 19.6 5.2 L19.4 18.6 C16.5 18.1, 14 18.4, 12 19.8 C10 18.4, 7.5 18.1, 4.6 18.6 Z" />
+      <path d="M12 6.5 C12.1 10.8, 11.9 15.4, 12 19.6" />
+      <path d="M6.9 8.6 C7.8 8.5, 8.7 8.5, 9.5 8.7 L9.4 11 C8.6 11.1, 7.7 11.1, 6.9 11 Z" />
+      <path d="M15.8 8.4 C16.8 8.6, 17.2 9.5, 16.9 10.4 C16.5 11.3, 15.3 11.4, 14.8 10.7 C14.3 9.9, 14.8 8.4, 15.8 8.4 Z" />
+      <path d="M7 14.2 C7.9 14.1, 8.8 14.1, 9.6 14.3" />
+      <path d="M14.5 14.2 C15.5 14.1, 16.3 14.1, 17.1 14.3" />
+    </svg>
+  );
+}
+
+/** Doodle speech bubble with a + — the comment-pin tool. */
+function CommentGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4.8 6 C4.9 4.9, 19 4.8, 19.2 6.1 L19.1 14.8 C19 15.9, 12.6 15.8, 10.8 15.9 L6.9 19.2 L7.4 15.8 C5.6 15.8, 4.8 15.5, 4.8 14.7 Z" />
+      <path d="M12 7.6 C12.1 9.2, 11.9 11.2, 12 13 M9.1 10.4 C10.8 10.3, 13.2 10.4, 14.9 10.3" />
     </svg>
   );
 }
@@ -153,15 +198,17 @@ function LockGlyph({ locked }: { locked: boolean }) {
 }
 
 export function SimpleChrome() {
+  const zenMode = useAppStore((s) => s.zenMode);
   const docId = useEditorStore((s) => s.docId);
   const docName = useEditorStore((s) => s.docName);
   const myRole = useEditorStore((s) => s.myRole);
+  const tplModalOpen = useAppStore((s) => s.tplModalOpen);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
   const cam = useEditorStore((s) => s.cam);
   const zoomBy = useEditorStore((s) => s.zoomBy);
   const fitToView = useEditorStore((s) => s.fitToView);
-  // Undo/redo availability spans BOTH histories (same rule as the full topbar).
+  // Undo/redo availability spans BOTH histories (SVG content + diagram layer).
   const tool = useEditorStore((s) => s.tool);
   const drawSpec = useEditorStore((s) => s.drawSpec);
   const toolLocked = useEditorStore((s) => s.toolLocked);
@@ -175,24 +222,49 @@ export function SimpleChrome() {
   const canUndo = svgCanUndo || diaCanUndo;
   const canRedo = svgCanRedo || diaCanRedo;
 
-  const tplModalOpen = useAppStore((s) => s.tplModalOpen);
-  const { exportSvg, exportPng } = useExport();
-
   const [menuOpen, setMenuOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [shapesOpen, setShapesOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const panelOpen = useAppStore((s) => s.simplePanelOpen);
+  const setPanelOpen = useAppStore((s) => s.setSimplePanelOpen);
+  const libraryOpen = useAppStore((s) => s.libraryOpen);
+  const setLibraryOpen = useAppStore((s) => s.setLibraryOpen);
+  // Comment tool — armed → the next canvas click drops a pin (Esc cancels).
+  const commentMode = useCommentsStore((s) => s.commentMode);
+  const openThreads = useCommentsStore(
+    (s) => s.comments.filter((c) => !c.parent_id && !c.resolved).length,
+  );
 
   // Excalidraw-style tool shortcuts: 1 = select cursor, 5/A = draw-arrow mode,
-  // other digits arm that island shape's draw tool (R/O/D/N/S letter
+  // other digits add that island shape at the canvas center (R/O/D/N/S letter
   // alternates). Yields to (a) typing in any field, (b) modifier chords, and
   // (c) the canvas's type-to-edit — with exactly ONE node selected a printable
   // key renames it (Canvas.tsx), so a digit must NOT spawn another shape then.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const a = document.activeElement as HTMLElement | null;
       if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) return;
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.shiftKey && !e.altKey && e.code === "KeyC") {
+        // ⌘⇧C — copy selection (or board) to the clipboard as a PNG.
+        e.preventDefault();
+        copyPngToClipboard();
+        return;
+      }
+      if (e.altKey && !meta && e.code === "KeyZ") {
+        // ⌥Z — Zen mode: chrome away, just the board.
+        e.preventDefault();
+        useAppStore.getState().toggleZen();
+        return;
+      }
+      if (meta || e.altKey) return;
+      if (e.key === "?") {
+        e.preventDefault();
+        const app = useAppStore.getState();
+        app.setShortcutsOpen(!app.shortcutsOpen);
+        return;
+      }
       // ⇧+letter belongs to the canvas (⇧H/⇧V flip) — never a tool switch.
       if (e.shiftKey && /^[a-z]$/i.test(e.key)) return;
       if (e.key === "q" || e.key === "Q") {
@@ -202,6 +274,14 @@ export function SimpleChrome() {
         const locked = !ed.toolLocked;
         ed.setToolLocked(locked);
         ed.setStatus(locked ? "Tool locked — stays armed after each draw (Q)." : "Tool unlocked.", "ok");
+        return;
+      }
+      if (e.key === "l" || e.key === "L") {
+        // Library browser — a tool key like Q, so it never yields to
+        // type-to-edit (Canvas.tsx excludes it too).
+        e.preventDefault();
+        const app = useAppStore.getState();
+        app.setLibraryOpen(!app.libraryOpen);
         return;
       }
       const ds = useDiagramStore.getState();
@@ -216,18 +296,47 @@ export function SimpleChrome() {
       e.preventDefault();
       const t = ISLAND[idx];
       if (t.kind === "mode") useEditorStore.getState().setTool(t.mode);
-      // Shape keys ARM the draw tool (Excalidraw): the next drag on the
-      // canvas sizes the shape A→B; a plain click draws NOTHING (accidental
-      // taps stay consequence-free — see Canvas.startDrawShape). A finished
-      // draw drops back to Select unless the tool lock (Q) is on.
+      // Shape keys ARM the draw tool (Excalidraw): next drag on the canvas
+      // sizes the shape A→B, a click draws nothing. A finished draw drops
+      // back to Select unless the tool lock (Q) is on — same contract as the
+      // arrow tool; Esc / Select disarms either way.
       else useEditorStore.getState().armDrawTool({ kind: t.entry.kind, init: entryInit(t.entry) });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Leaving Simple mode with a draw/arrow tool armed would strand a crosshair
-  // cursor with no visible mode button — reset to select on unmount.
+  // Esc closes the floating Properties/AI panel — unless focus is in a field
+  // (the chat composer / inspector inputs own their Esc).
+  useEffect(() => {
+    if (!panelOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const a = document.activeElement as HTMLElement | null;
+      if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) return;
+      setPanelOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [panelOpen, setPanelOpen]);
+
+  // Same Esc rule for the Library (its search field handles its own Esc:
+  // first clears the query, second closes).
+  useEffect(() => {
+    if (!libraryOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const a = document.activeElement as HTMLElement | null;
+      if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) return;
+      setLibraryOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [libraryOpen, setLibraryOpen]);
+
+  // Leaving the editor (or entering Present) with a draw/arrow tool armed
+  // would strand a crosshair cursor with no visible mode button — reset to
+  // select on unmount.
   useEffect(
     () => () => {
       const t = useEditorStore.getState().tool;
@@ -236,8 +345,8 @@ export function SimpleChrome() {
     [],
   );
 
-  // Live renames from collaborators — in Full mode EditorTopbar owns this
-  // listener; here it is unmounted, so Simple mode registers the same one.
+  // Live renames from collaborators — update the local title only (no PATCH:
+  // the peer who renamed already persisted it).
   useEffect(() => {
     onCollabName((name) => {
       useEditorStore.setState({ docName: "· " + name });
@@ -247,34 +356,72 @@ export function SimpleChrome() {
   }, [docId]);
 
   const title = docName.replace(/^·\s*/, "") || "Untitled board";
+  // Browser tab: just the board, then the product — short enough to read in
+  // a crowded tab strip (it used to be the long marketing tagline).
+  useEffect(() => {
+    document.title = `${title} · Noddle`;
+    return () => {
+      document.title = "noddle draw";
+    };
+  }, [title]);
   const canSave = !!docId && myRole !== "viewer";
 
-  // Real <button>s so the menu is keyboard-operable (Tab/Enter/Space) and
-  // disabled rows are announced as such.
-  const menuRow = (
-    label: string,
-    onClick: () => void,
-    opts?: { disabled?: boolean; ico?: string },
-  ) => (
-    <button
-      type="button"
-      className="menu-row"
-      disabled={opts?.disabled}
-      onClick={() => {
-        setMenuOpen(false);
-        onClick();
-      }}
-    >
-      {opts?.ico && <span className="ico">{opts.ico}</span>}
-      <span style={{ flex: 1, textAlign: "left" }}>{label}</span>
-    </button>
-  );
+  // Inline rename: click → input, Enter or blur commits via PATCH (+ live
+  // broadcast), Esc cancels; viewers can't.
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState(title);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const beginRename = () => {
+    if (!canSave) return;
+    setDraftName(title);
+    setEditingName(true);
+  };
+  useEffect(() => {
+    if (editingName) {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }
+  }, [editingName]);
+  const commitRename = async () => {
+    if (!editingName) return; // Enter already committed; this is the blur
+    setEditingName(false);
+    const name = draftName.trim();
+    if (!docId || !name || name === title) return;
+    try {
+      await api.patchDoc(docId, { name });
+      useEditorStore.setState({ docName: "· " + name });
+      broadcastName(name);
+      await useEditorStore.getState().refreshDocs();
+    } catch {
+      useEditorStore.getState().setStatus("Couldn't rename the board.", "error");
+    }
+  };
+
+
+  if (zenMode) {
+    return (
+      <>
+        <button
+          type="button"
+          className="simple-island simple-zen-exit"
+          title="Exit zen mode (⌥Z)"
+          onClick={() => useAppStore.getState().toggleZen()}
+        >
+          Exit zen mode
+        </button>
+        <ShortcutsDialog />
+      </>
+    );
+  }
 
   return (
     <>
+      <ShortcutsDialog />
       {/* ---- top-left: menu + title ---- */}
       <div className="simple-top-left">
-        <div style={{ position: "relative" }}>
+        <div className="simple-menu-anchor" style={{ position: "relative" }}>
+          {/* version history pops from the same corner as the menu it came from */}
+          {historyOpen && docId && <HistoryPanel docId={docId} onClose={() => setHistoryOpen(false)} />}
           <button
             className="simple-island simple-sq"
             title="Menu"
@@ -296,39 +443,58 @@ export function SimpleChrome() {
                   if (e.key === "Escape") setMenuOpen(false);
                 }}
               >
-                <div className="menu-body">
-                  {menuRow("New board", () => void createBoard(), { ico: "＋" })}
-                  {menuRow("Templates…", () => useAppStore.getState().setTplModal(true), { ico: "▦" })}
-                  {menuRow("Save", () => void useEditorStore.getState().save(), {
-                    disabled: !canSave,
-                    ico: "✓",
-                  })}
-                  {menuRow("Export SVG", () => exportSvg(), { ico: "⬡" })}
-                  {menuRow("Export PNG", () => void exportPng(), { ico: "▧" })}
-                  {menuRow("Present", () => useAppStore.getState().setPresenting(true), {
-                    disabled: !docId,
-                    ico: "▶",
-                  })}
-                  {menuRow("Keyboard shortcuts", () => useAppStore.getState().setShortcutsOpen(true), { ico: "?" })}
-                  <div className="simple-menu-sep" />
-                  {menuRow("Switch to Full interface", () => useAppStore.getState().setUiMode("full"), { ico: "◰" })}
-                </div>
+                <SimpleFileMenu
+                  title={title}
+                  canSave={canSave}
+                  onClose={() => setMenuOpen(false)}
+                  onRename={beginRename}
+                  onShare={() => setShareOpen(true)}
+                  onGif={(scope) => useAppStore.getState().setGifExportScope(scope)}
+                  onHistory={() => setHistoryOpen(true)}
+                />
               </div>
             </>
           )}
         </div>
-        <span className="simple-island simple-title" title={title}>
-          {title}
-          {myRole === "viewer" && <span className="simple-viewer"> · view only</span>}
-        </span>
+        {editingName ? (
+          <input
+            ref={nameInputRef}
+            className="simple-island simple-title simple-title-input"
+            value={draftName}
+            aria-label="Board name"
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={() => void commitRename()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void commitRename();
+              else if (e.key === "Escape") setEditingName(false);
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className={`simple-island simple-title${canSave ? " renamable" : ""}`}
+            title={canSave ? "Click to rename" : title}
+            onClick={beginRename}
+          >
+            {title}
+            {myRole === "viewer" && <span className="simple-viewer"> · view only</span>}
+          </button>
+        )}
       </div>
+
+      {/* Excalidraw-style tool hint under the island (eraser only) */}
+      {tool === "eraser" && (
+        <div className="simple-tool-hint" aria-live="polite">
+          Hold <kbd>⌥ Option</kbd> to revert the elements marked for deletion
+        </div>
+      )}
 
       {/* ---- top-center: tool island ---- */}
       <div className="simple-island simple-tools">
         <button
           className={`simple-tool${toolLocked ? " active" : ""}`}
           title={toolLocked ? "Tool locked — stays armed after each draw (Q)" : "Keep the tool armed after drawing (Q)"}
-          aria-label="Tool lock"
+          aria-label="Lock tool — keyboard Q"
           aria-pressed={toolLocked}
           onClick={() => useEditorStore.getState().setToolLocked(!toolLocked)}
         >
@@ -360,13 +526,22 @@ export function SimpleChrome() {
               }
             >
               <span className="simple-tool-glyph">
-                <MiniGlyph entry={t.entry} />
+                <MiniGlyph entry={t.entry} mono />
               </span>
               <span className="simple-tool-key" aria-hidden="true">{cornerKey(i)}</span>
             </button>
           ),
         )}
         <span className="simple-sep" />
+        <button
+          className={`simple-tool${libraryOpen ? " active" : ""}`}
+          title="Library (L)"
+          aria-label="Library — keyboard L"
+          aria-expanded={libraryOpen}
+          onClick={() => setLibraryOpen(!libraryOpen)}
+        >
+          <LibraryGlyph />
+        </button>
         <button
           className={`simple-tool simple-more${shapesOpen ? " active" : ""}`}
           title="All shapes & layers"
@@ -378,11 +553,24 @@ export function SimpleChrome() {
         </button>
       </div>
 
-      {/* ---- top-right: presence + share + panel toggle + layout switch
-           (the switch stays LAST — same right-edge anchor as the Full topbar,
-           so toggling never moves it under the cursor) ---- */}
+      {/* ---- top-right: presence + comment tool + share + panel toggle ---- */}
       <div className="simple-top-right">
         <Presence />
+        <button
+          className={`simple-island simple-sq simple-comment${commentMode ? " active" : ""}`}
+          disabled={!docId}
+          title={
+            commentMode
+              ? "Picking a spot — click the board to pin the comment (Esc to cancel)"
+              : "Add a comment (show/hide comments in ☰ → View)"
+          }
+          aria-label="Add a comment"
+          aria-pressed={commentMode}
+          onClick={() => useCommentsStore.getState().setCommentMode(!commentMode)}
+        >
+          <CommentGlyph />
+          {openThreads > 0 && <span className="count">{openThreads}</span>}
+        </button>
         <button
           className="btn btn-primary"
           disabled={!docId}
@@ -396,11 +584,10 @@ export function SimpleChrome() {
           title="Properties & AI-Noddle panel"
           aria-label="Properties and AI panel"
           aria-expanded={panelOpen}
-          onClick={() => setPanelOpen((v) => !v)}
+          onClick={() => setPanelOpen(!panelOpen)}
         >
           ◧
         </button>
-        <UiModeSwitch />
       </div>
 
       {/* ---- bottom-left: zoom + undo/redo islands ---- */}
@@ -421,17 +608,17 @@ export function SimpleChrome() {
       {/* ---- Excalidraw-style style panel: LEFT, while the draw tool is armed
            OR a shape is selected — the simple stand-in for full Properties
            (the full Shapes/Layers panel wins the slot when it's open) ---- */}
-      {(tool === "draw" || hasDiagramSelection) && !shapesOpen && <DrawStylePanel />}
+      {(tool === "draw" || tool === "pen" || hasDiagramSelection) && !shapesOpen && <DrawStylePanel />}
 
       {/* ---- floating panels (CSS repositions .ed-panel under .editor.simple) ---- */}
       {shapesOpen && <LeftPanel />}
       {panelOpen && <RightPanel />}
+      {libraryOpen && <LibraryPanel />}
 
       {shareOpen && docId && (
         <ShareDialog docId={docId} title={title} onClose={() => setShareOpen(false)} />
       )}
-      {/* In Full mode EditorTopbar renders this modal; here it is unmounted,
-          so the Templates… menu row needs its own mount. */}
+      {/* ☰ → Board → Templates… opens the picker */}
       {tplModalOpen && <TemplatesModal />}
     </>
   );

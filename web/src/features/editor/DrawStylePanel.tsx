@@ -10,10 +10,12 @@
  * Stroke width → strokeWidth, Stroke style → strokeDash, Sloppiness → sketch,
  * Edges → cornerRadius, Opacity → opacity (1 ⇒ field removed).
  */
-import type { DiagramEdge, DiagramNode, PenBrush } from "../../editor-core/diagram";
+import type { DiagramNode, NodeFontFamily, PenBrush } from "../../editor-core/diagram";
+import { FONT_STACKS, LABEL_INK } from "../diagram/typography";
 import { useDiagramStore } from "../../state/diagramStore";
+import { groupSelected, groupState, ungroupSelected } from "../../state/grouping";
 import { arrangeSelection, flipSelection } from "../../state/arrange";
-import { DEFAULT_BRUSH, useEditorStore } from "../../state/editorStore";
+import { DEFAULT_BRUSH, DRAW_STYLE_DEFAULTS, useEditorStore } from "../../state/editorStore";
 
 const STROKES = ["#2d3142", "#dc2626", "#16a34a", "#2563eb", "#eb6c36"];
 /** A #rrggbb for <input type=color> (it rejects names / rgba / "transparent"). */
@@ -43,6 +45,16 @@ function ColorWell({ value, presets, label, onPick }: {
   );
 }
 
+/** Stroke + matching pastel fill — built from the STROKES/FILLS above so a
+ * preset always lands on swatches the rows can show as selected. */
+const STYLE_PAIRS: { name: string; stroke: string; fill: string }[] = [
+  { name: "Ink", stroke: "#2d3142", fill: "#ffffff" },
+  { name: "Red", stroke: "#dc2626", fill: "#fee2e2" },
+  { name: "Green", stroke: "#16a34a", fill: "#dcfce7" },
+  { name: "Blue", stroke: "#2563eb", fill: "#dbeafe" },
+  { name: "Ember", stroke: "#eb6c36", fill: "#fef9c3" },
+];
+
 const FILLS: { v: string; label: string }[] = [
   { v: "transparent", label: "Transparent" },
   { v: "#ffffff", label: "White" },
@@ -52,14 +64,42 @@ const FILLS: { v: string; label: string }[] = [
   { v: "#fef9c3", label: "Soft yellow" },
 ];
 
+/** Excalidraw-style S/M/L/XL — M is the renderer default (14px). */
+const FONT_SIZES = [
+  { v: 12, label: "S" },
+  { v: 14, label: "M" },
+  { v: 20, label: "L" },
+  { v: 28, label: "XL" },
+];
+/** The three typeface TOKENS — stacks resolve in typography.ts. */
+const FAMILIES: { v: NodeFontFamily; label: string }[] = [
+  { v: "sans", label: "Sans" },
+  { v: "serif", label: "Serif" },
+  { v: "mono", label: "Mono" },
+];
+
+/** Doodle text-align glyph: three lines flush to one side. */
+function AlignGlyph({ align }: { align: "left" | "center" | "right" }) {
+  const rows = [12, 8, 10];
+  const x = (w: number) => (align === "left" ? 2 : align === "right" ? 14 - w : 8 - w / 2);
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      {rows.map((w, i) => (
+        <path key={i} d={`M${x(w)} ${4 + i * 4} h${w}`} />
+      ))}
+    </svg>
+  );
+}
+
 export function DrawStylePanel() {
   const style = useEditorStore((s) => s.drawStyle);
-  const setDrawStyle = useEditorStore((s) => s.setDrawStyle);
+  const armedInit = useEditorStore((s) => (s.tool === "draw" ? s.drawSpec?.init : undefined));
   const tool = useEditorStore((s) => s.tool);
   const allSelFreedraw = useDiagramStore((s) => {
     const ns = s.diagramSelection.map((id) => s.nodes[id]).filter(Boolean);
     return ns.length > 0 && ns.every((n) => n.kind === "freedraw");
   });
+  const setDrawStyle = useEditorStore((s) => s.setDrawStyle);
   // With a selection, the panel MIRRORS the first selected node (Excalidraw)
   // and every control live-patches the whole selection; without one it edits
   // the pending draw style.
@@ -70,6 +110,9 @@ export function DrawStylePanel() {
   const selCount = useDiagramStore(
     (s) => s.diagramSelection.filter((x) => s.nodes[x]).length,
   );
+  const grpNodes = useDiagramStore((s) => s.nodes);
+  const grpSel = useDiagramStore((s) => s.diagramSelection);
+  const grp = groupState(grpNodes, grpSel);
   // Arrow/connector variant: an EDGE selection (with no nodes) swaps the
   // panel to edge fields — same spot, same grammar, the Excalidraw arrow bar.
   const hasSelEdge = useDiagramStore((s) =>
@@ -97,18 +140,43 @@ export function DrawStylePanel() {
     return <PenPanel />;
   }
 
-  const src: Partial<DiagramNode> = firstSel ?? style;
+  // No selection: show EXACTLY what the next drawn shape will wear — the
+  // same merge Canvas.startDrawShape stamps (defaults < armed entry < picks).
+  const src: Partial<DiagramNode> = firstSel ?? { ...DRAW_STYLE_DEFAULTS, ...armedInit, ...style };
   const stroke = src.stroke ?? "#2d3142";
   const fill = src.fill ?? "transparent";
   const width = src.strokeWidth ?? 2;
   const dash = src.strokeDash ?? "solid";
   const sketchy = src.sketch === true;
-  // Drawn shapes default to a soft 3px radius; "rounded" means the big 12px.
+  // "Rounded" = the big 12px (the house default); legacy shapes carry 0–3px.
   const round = (src.cornerRadius ?? 3) >= 8;
   const opacity = src.opacity ?? 1;
+  const fontSize = src.fontSize ?? 14;
+  const family = src.fontFamily ?? "sans";
+  const align = src.textAlign ?? "center";
+  const textColor = src.textColor ?? LABEL_INK;
 
   return (
     <div className="draw-style" role="group" aria-label="Draw style">
+      {/* Selection bar — grouping lives at the TOP so it is seen the moment
+          several shapes are picked (it used to sit below the fold). */}
+      {(grp.canGroup || grp.canUngroup) && (
+        <div className="ds-selbar">
+          <span className="ds-selcount">
+            {grp.wholeGroup ? "Group" : `${selCount} selected`}
+          </span>
+          {grp.canGroup && (
+            <button className="ds-opt ds-opt-wide" title="Group (⌘G) — move them as one" aria-label="Group selection" onClick={groupSelected}>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 2.5 h3 M10.5 2.5 h3 v3 M13.5 10.5 v3 h-3 M5.5 13.5 h-3 v-3 M2.5 5.5 v-3" /><path d="M5 5 h3.5 v3.5 H5 Z M8 8 h3 v3 H8 Z" /></svg> Group
+            </button>
+          )}
+          {grp.canUngroup && (
+            <button className="ds-opt ds-opt-wide" title="Ungroup (⌘⇧G)" aria-label="Ungroup selection" onClick={ungroupSelected}>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 2.5 h4 v4 h-4 Z M9.5 9.5 h4 v4 h-4 Z" /><path d="M8.5 3.5 h4 M3.5 8.5 v4" strokeDasharray="1.6 1.8" /></svg> Ungroup
+            </button>
+          )}
+        </div>
+      )}
       <div className="ds-label">Stroke</div>
       <div className="ds-row">
         {STROKES.map((c) => (
@@ -121,6 +189,7 @@ export function DrawStylePanel() {
             onClick={() => apply({ stroke: c })}
           />
         ))}
+        <ColorWell value={stroke} presets={STROKES} label="Stroke" onPick={(c) => apply({ stroke: c })} />
       </div>
 
       <div className="ds-label">Background</div>
@@ -135,6 +204,29 @@ export function DrawStylePanel() {
             onClick={() => apply({ fill: f.v })}
           />
         ))}
+        <ColorWell value={fill} presets={FILLS.map((f) => f.v)} label="Background" onPick={(c) => apply({ fill: c })} />
+      </div>
+
+      {/* One-click harmonised pairs (stroke + its own pastel fill) — moved
+          here from the Properties inspector so the whole look sits in one
+          place, right under the two colour rows it combines. */}
+      <div className="ds-label">Style</div>
+      <div className="ds-row ds-presets">
+        {STYLE_PAIRS.map((p) => {
+          const on = stroke.toLowerCase() === p.stroke && fill.toLowerCase() === p.fill;
+          return (
+            <button
+              key={p.name}
+              className={`ds-preset${on ? " active" : ""}`}
+              title={p.name}
+              aria-label={`Style ${p.name}`}
+              style={{ background: p.fill, borderColor: p.stroke }}
+              onClick={() => apply({ stroke: p.stroke, fill: p.fill })}
+            >
+              <span style={{ background: p.stroke }} />
+            </button>
+          );
+        })}
       </div>
 
       <div className="ds-label">Stroke width</div>
@@ -177,7 +269,7 @@ export function DrawStylePanel() {
           className={`ds-opt${!sketchy ? " active" : ""}`}
           title="Clean lines"
           aria-label="Clean lines"
-          onClick={() => apply({ sketch: undefined })}
+          onClick={() => apply({ sketch: false })}
         >
           <svg viewBox="0 0 24 12" width="22" height="11" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 8 C 8 4, 16 4, 22 6" /></svg>
         </button>
@@ -209,6 +301,105 @@ export function DrawStylePanel() {
         >
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 13 V8 a5 5 0 0 1 5-5 H13" /></svg>
         </button>
+      </div>
+
+      {/* Text — the label of the selected shape(s) / the next shape or text
+          label drawn. Picks are stored EXPLICITLY (never "undefined = back to
+          default"): DRAW_STYLE_DEFAULTS is not the renderer default, so a
+          removed key would snap back to the house style instead. */}
+      <div className="ds-label">Font size</div>
+      <div className="ds-row">
+        {FONT_SIZES.map((f) => (
+          <button
+            key={f.v}
+            className={`ds-opt${fontSize === f.v ? " active" : ""}`}
+            title={`${f.label} (${f.v}px)`}
+            aria-label={`Font size ${f.label}`}
+            onClick={() => apply({ fontSize: f.v })}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="ds-label">Font family</div>
+      <div className="ds-row">
+        {FAMILIES.map((f) => (
+          <button
+            key={f.v}
+            className={`ds-opt${family === f.v ? " active" : ""}`}
+            style={{ fontFamily: FONT_STACKS[f.v] }}
+            title={f.label}
+            aria-label={`Font ${f.label}`}
+            onClick={() => apply({ fontFamily: f.v })}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="ds-label">Text style</div>
+      <div className="ds-row">
+        <button
+          className={`ds-opt${src.bold ? " active" : ""}`}
+          style={{ fontWeight: 800 }}
+          title="Bold (⌘B)"
+          aria-label="Bold"
+          aria-pressed={!!src.bold}
+          onClick={() => apply({ bold: !src.bold })}
+        >
+          B
+        </button>
+        <button
+          className={`ds-opt${src.italic ? " active" : ""}`}
+          style={{ fontStyle: "italic", fontFamily: "Georgia, serif" }}
+          title="Italic (⌘I)"
+          aria-label="Italic"
+          aria-pressed={!!src.italic}
+          onClick={() => apply({ italic: !src.italic })}
+        >
+          I
+        </button>
+        <button
+          className={`ds-opt${src.underline ? " active" : ""}`}
+          style={{ textDecoration: "underline" }}
+          title="Underline (⌘U)"
+          aria-label="Underline"
+          aria-pressed={!!src.underline}
+          onClick={() => apply({ underline: !src.underline })}
+        >
+          U
+        </button>
+      </div>
+
+      <div className="ds-label">Text align</div>
+      <div className="ds-row">
+        {(["left", "center", "right"] as const).map((a) => (
+          <button
+            key={a}
+            className={`ds-opt${align === a ? " active" : ""}`}
+            title={`Align ${a}`}
+            aria-label={`Align ${a}`}
+            onClick={() => apply({ textAlign: a })}
+          >
+            <AlignGlyph align={a} />
+          </button>
+        ))}
+      </div>
+
+      <div className="ds-label">Text color</div>
+      <div className="ds-row">
+        {STROKES.map((c) => (
+          <button
+            key={c}
+            className={`ds-swatch${textColor === c ? " active" : ""}`}
+            style={{ background: c }}
+            title={c}
+            aria-label={`Text color ${c}`}
+            onClick={() => apply({ textColor: c })}
+          />
+        ))}
+        <ColorWell value={textColor} presets={STROKES} label="Text" onPick={(c) => apply({ textColor: c })} />
       </div>
 
       <div className="ds-label">Opacity</div>
@@ -271,6 +462,38 @@ export function DrawStylePanel() {
               </button>
             ))}
           </div>
+          {selCount >= 2 && (
+            <>
+              <div className="ds-label">Align</div>
+              <div className="ds-row" data-testid="ds-align">
+                {([
+                  ["left", "Align left", "M2.5 2 V14 M5 4.5 H12 V7 H5 Z M5 9.5 H9.5 V12 H5 Z"],
+                  ["centerH", "Align horizontal centers", "M8 2 V14 M4 4.5 H12 V7 H4 Z M5.5 9.5 H10.5 V12 H5.5 Z"],
+                  ["right", "Align right", "M13.5 2 V14 M4 4.5 H11 V7 H4 Z M6.5 9.5 H11 V12 H6.5 Z"],
+                  ["top", "Align top", "M2 2.5 H14 M4.5 5 V12 H7 V5 Z M9.5 5 V9.5 H12 V5 Z"],
+                  ["middleV", "Align vertical centers", "M2 8 H14 M4.5 4 V12 H7 V4 Z M9.5 5.5 V10.5 H12 V5.5 Z"],
+                  ["bottom", "Align bottom", "M2 13.5 H14 M4.5 4 V11 H7 V4 Z M9.5 6.5 V11 H12 V6.5 Z"],
+                ] as const).map(([mode, title, d]) => (
+                  <button key={mode} className="ds-opt" title={title} aria-label={title}
+                    onClick={() => useDiagramStore.getState().alignSelection(mode)}>
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+                  </button>
+                ))}
+              </div>
+              {selCount >= 3 && (
+                <div className="ds-row" style={{ marginTop: 5 }}>
+                  <button className="ds-opt" title="Distribute horizontally" aria-label="Distribute horizontally"
+                    onClick={() => useDiagramStore.getState().alignSelection("distH")}>
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 2.5 V13.5 M14 2.5 V13.5 M6.5 5 H9.5 V11 H6.5 Z" /></svg>
+                  </button>
+                  <button className="ds-opt" title="Distribute vertically" aria-label="Distribute vertically"
+                    onClick={() => useDiagramStore.getState().alignSelection("distV")}>
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 2 H13.5 M2.5 14 H13.5 M5 6.5 H11 V9.5 H5 Z" /></svg>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
           <div className="ds-label">Actions</div>
           <div className="ds-row">
             <button
@@ -442,13 +665,13 @@ function EdgeQuickPanel() {
   });
   if (!firstEdge) return null;
 
-  const applyEdge = (patch: Partial<DiagramEdge>) => {
-    // The next connector is born with this style (Excalidraw remembers it).
-    useEditorStore.getState().setEdgeStyle(patch);
+  const applyEdge = (patch: Record<string, unknown>) => {
     const ds = useDiagramStore.getState();
     ds.diagramSelection
       .filter((id) => ds.edges[id])
       .forEach((id) => ds.updateEdge(id, patch));
+    // New arrows are born with the last style the user picked.
+    useEditorStore.getState().setEdgeStyle(patch);
   };
 
   const heads = ["none", "arrow", "triangle", "circle", "diamond"] as const;
@@ -471,6 +694,7 @@ function EdgeQuickPanel() {
             onClick={() => applyEdge({ stroke: c })}
           />
         ))}
+        <ColorWell value={firstEdge.stroke} presets={STROKES} label="Arrow stroke" onPick={(c) => applyEdge({ stroke: c })} />
       </div>
 
       <div className="ds-label">Stroke width</div>
@@ -503,26 +727,63 @@ function EdgeQuickPanel() {
         ))}
       </div>
 
-      <div className="ds-label">Line</div>
+      <div className="ds-label">Arrow type</div>
       <div className="ds-row">
-        {([["straight", "Straight"], ["curved", "Curved"], ["elbow", "Elbow"]] as const).map(([v, label]) => (
-          <button
-            key={v}
-            className={`ds-opt${firstEdge.routing === v ? " active" : ""}`}
-            title={label}
-            aria-label={`${label} routing`}
-            onClick={() => applyEdge({ routing: v })}
-          >
-            {label}
-          </button>
-        ))}
+        <button
+          className={`ds-opt${firstEdge.routing === "straight" ? " active" : ""}`}
+          title="Sharp"
+          aria-label="Sharp (straight) routing"
+          onClick={() => applyEdge({ routing: "straight" })}
+        >
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 16 L16 4 M10.5 4 H16 V9.5" />
+          </svg>
+        </button>
+        <button
+          className={`ds-opt${firstEdge.routing === "curved" ? " active" : ""}`}
+          title="Curved"
+          aria-label="Curved routing"
+          onClick={() => applyEdge({ routing: "curved" })}
+        >
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 16 C4 9, 9 5, 15.5 5 M11.5 2.5 L15.5 5 L12 8.5" />
+          </svg>
+        </button>
+        <button
+          className={`ds-opt${firstEdge.routing === "elbow" ? " active" : ""}`}
+          title="Elbow"
+          aria-label="Elbow routing"
+          onClick={() => applyEdge({ routing: "elbow" })}
+        >
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 16 V9 H14 V4 M10.5 4 H14 V7.5" />
+          </svg>
+        </button>
       </div>
 
-      <div className="ds-label">End head</div>
-      <div className="ds-row">
+      <div className="ds-label">Arrowheads</div>
+      <div className="ds-row ds-heads">
+        <span className="ds-sub">Start</span>
+        {heads.map((h) => {
+          const startHead = firstEdge.startHead ?? (firstEdge.startArrow ? "arrow" : "none");
+          return (
+            <button
+              key={`s-${h}`}
+              className={`ds-opt${startHead === h ? " active" : ""}`}
+              title={h}
+              aria-label={`Start head ${h}`}
+              onClick={() => applyEdge({ startHead: h, startArrow: h !== "none" })}
+            >
+              {headGlyph[h]}
+            </button>
+          );
+        })}
+      </div>
+      <div className="ds-row ds-heads" style={{ marginTop: 5 }}>
+        <span className="ds-sub">End</span>
         {heads.map((h) => (
           <button
-            key={h}
+            key={`e-${h}`}
             className={`ds-opt${endHead === h ? " active" : ""}`}
             title={h}
             aria-label={`End head ${h}`}
@@ -531,6 +792,81 @@ function EdgeQuickPanel() {
             {headGlyph[h]}
           </button>
         ))}
+      </div>
+
+      {/* Quick flow animation (the Properties inspector has the full set:
+          intensity etc.). None clears `animated`; a style turns it on. */}
+      <div className="ds-label">Animation</div>
+      <div className="ds-row">
+        {([[null, "None"], ["dash", "Dash"], ["dots", "Dots"], ["beam", "Beam"], ["pulse", "Pulse"]] as const).map(([v, label]) => {
+          const on = v === null ? !firstEdge.animated : firstEdge.animated && (firstEdge.flowStyle ?? "dash") === v;
+          return (
+            <button
+              key={label}
+              className={`ds-opt${on ? " active" : ""}`}
+              title={v ? `${label} flow` : "No animation"}
+              aria-label={v ? `Animation ${label}` : "No animation"}
+              onClick={() => applyEdge(v === null ? { animated: false } : { animated: true, flowStyle: v })}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {firstEdge.animated && (
+        <div className="ds-row" style={{ marginTop: 5 }}>
+          {([[0.5, "Slow"], [1, "Normal"], [2, "Fast"]] as const).map(([v, label]) => (
+            <button
+              key={v}
+              className={`ds-opt${(firstEdge.flowSpeed ?? 1) === v ? " active" : ""}`}
+              title={`${label} (${v}\u00d7)`}
+              aria-label={`Flow speed ${label}`}
+              onClick={() => applyEdge({ flowSpeed: v })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="ds-label">Layers</div>
+      <div className="ds-row">
+        <button
+          className="ds-opt"
+          title="Send to back"
+          aria-label="Send connector to back"
+          onClick={() => {
+            const ds = useDiagramStore.getState();
+            const zs = [
+              ...Object.values(ds.nodes).map((n) => n.z ?? 0),
+              ...Object.values(ds.edges).map((ed) => ed.z ?? 0),
+            ];
+            const base = Math.min(...zs, 0) - 1;
+            ds.diagramSelection
+              .filter((id) => ds.edges[id])
+              .forEach((id, i) => ds.updateEdge(id, { z: base - i }));
+          }}
+        >
+          ⤓
+        </button>
+        <button
+          className="ds-opt"
+          title="Bring to front"
+          aria-label="Bring connector to front"
+          onClick={() => {
+            const ds = useDiagramStore.getState();
+            const zs = [
+              ...Object.values(ds.nodes).map((n) => n.z ?? 0),
+              ...Object.values(ds.edges).map((ed) => ed.z ?? 0),
+            ];
+            const base = Math.max(...zs, 0) + 1;
+            ds.diagramSelection
+              .filter((id) => ds.edges[id])
+              .forEach((id, i) => ds.updateEdge(id, { z: base + i }));
+          }}
+        >
+          ⤒
+        </button>
       </div>
 
       <div className="ds-label">Actions</div>

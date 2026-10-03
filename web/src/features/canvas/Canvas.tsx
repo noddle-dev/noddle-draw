@@ -716,16 +716,6 @@ export function Canvas() {
         }
       }
       if (typingInField()) return;
-      // View toggles: [ hides the left rail, ] the right rail, \ enters focus
-      // mode (just the canvas). Handled up here so the type-to-edit branch
-      // below (which swallows any single char when one node is selected)
-      // can't eat them.
-      if (!e.metaKey && !e.ctrlKey && !e.altKey) {
-        if (e.key === "[") { e.preventDefault(); useAppStore.getState().toggleLeftPanel(); return; }
-        if (e.key === "]") { e.preventDefault(); useAppStore.getState().toggleRightPanel(); return; }
-        if (e.key === "\\") { e.preventDefault(); useAppStore.getState().toggleFocusMode(); return; }
-        if (e.key === "?") { e.preventDefault(); useAppStore.getState().setShortcutsOpen(true); return; }
-      }
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -867,12 +857,6 @@ export function Canvas() {
         // Arrow tool — the ONLY mode where shape borders/ports draw connectors.
         s().setTool("arrow");
       } else if (e.key === "Escape") {
-        // Esc leaves focus mode first (it hid the exit chrome); only then does
-        // it clear the selection.
-        if (useAppStore.getState().focusMode) {
-          useAppStore.getState().toggleFocusMode(false);
-          return;
-        }
         s().setSelection([]);
         useDiagramStore.getState().setDiagramSelection([]);
         if (s().tool !== "select" && s().tool !== "pan") s().setTool("select"); // disarm

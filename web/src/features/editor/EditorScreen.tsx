@@ -1,7 +1,7 @@
 /**
- * features/editor/EditorScreen — the full editor: top chrome, Shapes/Layers
- * panel, the canvas engine with REAL collaboration overlays, and the
- * Properties/Claude panel.
+ * features/editor/EditorScreen — the editor: the canvas engine with REAL
+ * collaboration overlays, under the Excalidraw-style floating chrome
+ * (SimpleMode.tsx — the only editor UI since the Full layout was retired).
  *
  * Responsibilities beyond composition:
  *   • apply queued hand-offs (pendingDocId → openDoc, pendingSvg → load) once
@@ -10,7 +10,7 @@
  *   • join/leave the document's live-collab room on docId change and stream
  *     the local pointer as a cursor (content coords).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Canvas } from "../canvas";
 import { screenToContent } from "../../editor-core";
 import { useEditorStore } from "../../state/editorStore";
@@ -22,23 +22,58 @@ import { PageBar } from "./PageBar";
 import { connectCollab, disconnectCollab, sendCursor } from "../../state/collabStore";
 import { rememberBoard } from "../../state/appStore";
 import { api } from "../../shared/api/client";
-import { EditorTopbar } from "./EditorTopbar";
-import { LeftPanel } from "./LeftPanel";
-import { RightPanel } from "./RightPanel";
 import { SimpleChrome } from "./SimpleMode";
+import { GifExportModal } from "./GifExportModal";
 import { CanvasCollab } from "./CanvasCollab";
 import { CommentsLayer } from "../comments/CommentsLayer";
-import { ShortcutsModal } from "./ShortcutsModal";
 import { addImageToBoard, imageFromDataTransfer } from "./pasteImage";
 import { usePagesStore } from "../../state/pagesStore";
 
 /** Autosave debounce — long enough to batch a drag, short enough to feel safe. */
 const AUTOSAVE_MS = 1800;
 
-function StatusBar() {
+/** Status lines that are background noise, not news (there is no status bar). */
+const TOAST_SKIP = /^(Autosaved|Saving|Editing text|Loading|Opened)/;
+/** Every toast lives exactly this long (3s, then it fades). */
+const TOAST_MS = 3000;
+/** A neutral hint already shown is not repeated within this window. */
+const HINT_REPEAT_MS = 30000;
+
+/**
+ * The editor has no status bar, so editor feedback ("Grouped 3 shapes…",
+ * "Couldn't rename…", import errors) used to vanish. This toast surfaces each
+ * NEW status for a few seconds under the tool island; routine autosave/edit
+ * hints are skipped. aria-live so screen readers announce it too.
+ */
+function SimpleToast() {
   const status = useEditorStore((s) => s.status);
   const kind = useEditorStore((s) => s.statusKind);
-  return <div className={`editor-statusbar${kind ? " " + kind : ""}`}>{status}</div>;
+  const [shown, setShown] = useState<{ text: string; kind: string; id: number } | null>(null);
+  const seen = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!status || TOAST_SKIP.test(status)) return;
+    // Results (ok/error) always show; a neutral HINT shows once per 30s —
+    // tool hints used to re-fire on every hover and never went away.
+    const now = Date.now();
+    if (!kind && now - (seen.current.get(status) ?? 0) < HINT_REPEAT_MS) return;
+    seen.current.set(status, now);
+    setShown({ text: status, kind, id: now });
+  }, [status, kind]);
+  useEffect(() => {
+    if (!shown) return;
+    const t = window.setTimeout(() => setShown(null), TOAST_MS);
+    return () => window.clearTimeout(t);
+  }, [shown]);
+  return (
+    <div className="simple-toast-host" aria-live="polite">
+      {shown && (
+        <div key={shown.id} className={`simple-toast${shown.kind ? " " + shown.kind : ""}`}>
+          {shown.kind && <span className="simple-toast-dot" aria-hidden="true" />}
+          {shown.text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** A /d/{id} deep link that doesn't resolve (deleted / view-restricted). */
@@ -89,18 +124,6 @@ function PresentHud() {
   );
 }
 
-/** Focus mode HUD: a minimal exit affordance (all chrome is CSS-hidden). */
-function FocusHud() {
-  return (
-    <div className="present-hud focus-hud">
-      <span className="pg">Focus mode</span>
-      <button className="exit" onClick={() => useAppStore.getState().toggleFocusMode(false)}>
-        ✕ Exit (Esc)
-      </button>
-    </div>
-  );
-}
-
 export function EditorScreen() {
   const refs = useEditorStore((s) => s.refs);
   const docId = useEditorStore((s) => s.docId);
@@ -108,17 +131,13 @@ export function EditorScreen() {
   const pendingSvg = useAppStore((s) => s.pendingSvg);
   const embedMode = useAppStore((s) => s.embedMode);
   const presenting = useAppStore((s) => s.presenting);
-  const leftPanelOpen = useAppStore((s) => s.leftPanelOpen);
-  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
-  const focusMode = useAppStore((s) => s.focusMode);
-  const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
-  const notFound = useEditorStore((s) => s.notFound);
-  // Simple mode: swap the docked chrome for floating islands — the canvas,
-  // collab, comments and all engine behavior are untouched. Embeds keep their
-  // own chrome-less rendering regardless of the stored preference.
-  const uiMode = useAppStore((s) => s.uiMode);
-  const simple = uiMode === "simple" && !embedMode;
+  const zenMode = useAppStore((s) => s.zenMode);
+  // The floating-island chrome (and its `.editor.simple` CSS) is the editor
+  // UI everywhere except embeds, which stay chrome-less.
+  const gifExportScope = useAppStore((s) => s.gifExportScope);
+  const simple = !embedMode;
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
+  const notFound = useEditorStore((s) => s.notFound);
 
   // Presentation mode: fullscreen (best-effort) + ←/→ page nav + Esc exits.
   useEffect(() => {
@@ -154,40 +173,21 @@ export function EditorScreen() {
     };
   }, [presenting]);
 
+  // Present auto-fit: entering present mode and every slide switch open the
+  // page FITTED — the presenter's pan/zoom on one slide must never leak into
+  // the next. Double-rAF so the freshly switched page's layer has painted
+  // (same two-frame trick as the deck exporter).
+  const activePageId = usePagesStore((s) => s.activeId);
+  useEffect(() => {
+    if (!presenting) return;
+    const raf = requestAnimationFrame(() =>
+      requestAnimationFrame(() => useEditorStore.getState().fitToView()),
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [presenting, activePageId]);
+
   // Start diagram-layer undo/redo checkpointing (idempotent).
   useEffect(startDiagramHistory, []);
-
-  // Keep the viewport visually anchored across the Full ↔ Simple swap. The
-  // docked panels/topbar change the canvas host's size AND offset, while the
-  // camera transform is host-relative — so without this, the board "jumps" by
-  // exactly the panel width/topbar height. The zustand subscriber runs
-  // synchronously inside setUiMode, BEFORE React re-renders: capture the
-  // content point under the old canvas center there, then after the new
-  // layout paints (double rAF), pan the camera so the same content point sits
-  // at the new center. Zoom is untouched.
-  useEffect(() => {
-    return useAppStore.subscribe((s, prev) => {
-      if (s.uiMode === prev.uiMode) return;
-      const es = useEditorStore.getState();
-      if (!es.refs) return;
-      const r = es.refs.host.getBoundingClientRect();
-      const c = screenToContent(es.refs.content, r.left + r.width / 2, r.top + r.height / 2);
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          const es2 = useEditorStore.getState();
-          if (!es2.refs) return;
-          const r2 = es2.refs.host.getBoundingClientRect();
-          const ctm = es2.refs.content.getScreenCTM();
-          if (!ctm) return;
-          const p = new DOMPoint(c.x, c.y).matrixTransform(ctm);
-          const dx = r2.left + r2.width / 2 - p.x;
-          const dy = r2.top + r2.height / 2 - p.y;
-          if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
-          es2.setCam({ x: es2.cam.x + dx, y: es2.cam.y + dy, z: es2.cam.z });
-        }),
-      );
-    });
-  }, []);
 
   // Right-click a diagram object (or a multi-selection) → context menu with
   // AI-enrich / group-by / z-order / delete.
@@ -339,19 +339,9 @@ export function EditorScreen() {
 
   return (
     <div
-      className={
-        "editor" +
-        (presenting ? " presenting" : "") +
-        (embedMode ? " embedding" : "") +
-        (focusMode ? " focus" : "") +
-        (simple ? " simple" : "") +
-        (!leftPanelOpen ? " hide-left" : "") +
-        (!rightPanelOpen ? " hide-right" : "")
-      }
+      className={`editor${presenting ? " presenting" : ""}${embedMode ? " embedding" : ""}${simple ? " simple" : ""}${zenMode && !presenting ? " zen" : ""}`}
     >
-      {!simple && <EditorTopbar />}
       <div className="editor-body">
-        {!simple && <LeftPanel />}
         <div className="editor-canvas">
           <Canvas />
           <CanvasCollab />
@@ -359,14 +349,16 @@ export function EditorScreen() {
           {ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
           <PageBar />
         </div>
-        {!simple && <RightPanel />}
       </div>
-      {!simple && <StatusBar />}
-      {/* Focus mode hides ALL chrome — the floating islands included. */}
-      {simple && !presenting && !focusMode && <SimpleChrome />}
+      {simple && <SimpleToast />}
+      {simple && !presenting && <SimpleChrome />}
+      {gifExportScope && (
+        <GifExportModal
+          scope={gifExportScope}
+          onClose={() => useAppStore.getState().setGifExportScope(null)}
+        />
+      )}
       {presenting && <PresentHud />}
-      {focusMode && !presenting && <FocusHud />}
-      {shortcutsOpen && <ShortcutsModal />}
       {notFound && <BoardNotFound />}
     </div>
   );

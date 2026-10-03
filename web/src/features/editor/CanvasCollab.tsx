@@ -14,6 +14,7 @@ import { usePagesStore } from "../../state/pagesStore";
 import { getAiKeyConfig } from "../../shared/api/client";
 import { poolInfoSync } from "../../shared/poolConfig";
 import { AiKeySettings } from "../ai/AiKeySettings";
+import { SimpleChatStatus } from "./SimpleChatStatus";
 import { askClaudeEdit } from "./claudeEdit";
 
 const STALE_MS = 6000;
@@ -74,9 +75,21 @@ export function CanvasCollab() {
   const aiThinking = useAppStore((s) => s.aiThinking);
   const queuedChats = useAppStore((s) => s.queuedChats);
   // UNCONTROLLED input — same IME fix as the chat panel: a controlled value +
-  // Vietnamese composition + store re-renders duplicated the last segment.
+  // IME composition + store re-renders duplicated the last segment.
   const inputRef = useRef<HTMLInputElement>(null);
   const [keyModalOpen, setKeyModalOpen] = useState(false);
+  // Embeds are passive views — no AI status strip / conversation toggle.
+  const simple = !useAppStore((s) => s.embedMode);
+  // Is the floating panel currently showing the conversation?
+  const chatShown = useAppStore((s) => s.simplePanelOpen && s.rightTab === "claude");
+  const toggleChat = () => {
+    const app = useAppStore.getState();
+    if (chatShown) app.setSimplePanelOpen(false);
+    else {
+      app.setRightTab("claude");
+      app.setSimplePanelOpen(true);
+    }
+  };
 
   const sendToClaude = () => {
     const el = inputRef.current;
@@ -88,8 +101,9 @@ export function CanvasCollab() {
       setKeyModalOpen(true);
       return;
     }
-    // Open the chat panel so the conversation is visible; the queue takes it
-    // from here — no locking, messages process in order.
+    // Point the chat panel at the conversation (progress surfaces in
+    // SimpleChatStatus instead of popping a panel over the canvas). The
+    // queue takes it from here, in order.
     useAppStore.getState().setRightTab("claude");
     if (el) el.value = "";
     askClaudeEdit(t);
@@ -104,6 +118,7 @@ export function CanvasCollab() {
   return (
     <>
       <RemoteCursors />
+      {simple && <SimpleChatStatus />}
       <div className="canvas-chatbar">
         <span className="spark">✦</span>
         <input
@@ -123,6 +138,7 @@ export function CanvasCollab() {
             if (hasImage) {
               e.preventDefault();
               useAppStore.getState().setRightTab("claude");
+              useAppStore.getState().setSimplePanelOpen(true);
               // Re-dispatch on the panel textarea once it mounts.
               const dt = e.clipboardData;
               requestAnimationFrame(() => {
@@ -138,6 +154,20 @@ export function CanvasCollab() {
             }
           }}
         />
+        {simple && (
+          <button
+            className={`chat-open${chatShown ? " active" : ""}`}
+            title={chatShown ? "Hide the AI conversation" : "Open the AI conversation (history, Draw/Ask, AI key)"}
+            aria-label={chatShown ? "Hide AI conversation" : "Open AI conversation"}
+            aria-pressed={chatShown}
+            onClick={toggleChat}
+          >
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M5 6.2 C5.1 5.2, 18.8 5.1, 19 6.3 L18.9 14.6 C18.8 15.6, 12.4 15.5, 10.6 15.6 L7 18.8 L7.4 15.5 C5.7 15.5, 5 15.2, 5 14.5 Z" />
+              <path d="M8.8 9.4 H15.2 M8.8 12 H13" />
+            </svg>
+          </button>
+        )}
         <button className="send" onClick={sendToClaude}>↑</button>
       </div>
       {keyModalOpen && <AiKeySettings onClose={() => setKeyModalOpen(false)} />}

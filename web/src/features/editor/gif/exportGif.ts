@@ -49,6 +49,8 @@ function flowParams(group: Element): { speed: number; intensity: FlowIntensity }
 }
 
 export interface GifOptions {
+  /** draw.io-style framing — page (default) / fit content / selection. */
+  scope?: "page" | "fit" | "selection";
   durationMs: number;
   fps: number;
   scale: number;
@@ -83,9 +85,13 @@ export async function exportAnimatedGif(
   onProgress: (v: number) => void,
 ): Promise<Blob> {
   const st = useEditorStore.getState();
-  const baseSvg = st.currentBoardSvg();
+  const baseSvg = st.currentBoardSvg({ scope: opts.scope ?? "page" });
   if (!baseSvg) throw new Error("Board is empty — nothing to export.");
-  const { w, h } = st.artboard;
+  // Size from the (possibly cropped) viewBox — "fit"/"selection" scopes frame
+  // a content box, not the artboard.
+  const vb = /viewBox="[^"]*?\s([\d.]+)\s([\d.]+)"/.exec(baseSvg);
+  const w = vb ? parseFloat(vb[1]) : st.artboard.w;
+  const h = vb ? parseFloat(vb[2]) : st.artboard.h;
 
   const outW = Math.max(1, Math.round(w * opts.scale));
   const outH = Math.max(1, Math.round(h * opts.scale));
@@ -95,6 +101,24 @@ export async function exportAnimatedGif(
   const doc = new DOMParser().parseFromString(baseSvg, "image/svg+xml");
   if (doc.querySelector("parsererror")) throw new Error("The board's SVG is invalid.");
   const serializer = new XMLSerializer();
+
+  // Quantize + LZW run in a worker (gifWorker.ts) so the tab never freezes —
+  // frame buffers are TRANSFERRED (zero-copy) and quantization overlaps the
+  // next frame's rasterization. Any worker failure falls back to the old
+  // synchronous path so exports still finish.
+  let worker: Worker | null = null;
+  let workerErr: string | null = null;
+  try {
+    worker = new Worker(new URL("./gifWorker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (ev) => {
+      if (ev.data?.type === "error") workerErr = String(ev.data.message);
+    };
+    worker.onerror = (ev) => {
+      workerErr = ev.message || "GIF worker crashed";
+    };
+  } catch {
+    worker = null;
+  }
 
   // ---- collect edge animations with their per-edge speed/intensity -------
   // (data-* attrs on the edge group; cycle = base/speed so 1.2s-multiple GIF
@@ -290,8 +314,15 @@ export async function exportAnimatedGif(
     ctx.drawImage(img, 0, 0, outW, outH);
     const data = ctx.getImageData(0, 0, outW, outH).data;
 
-    const { indices, palette } = quantize(data);
-    frames.push({ indices, palette, delayMs });
+    if (worker && !workerErr) {
+      // ImageData owns a fresh buffer per call — safe to transfer away.
+      worker.postMessage({ type: "frame", rgba: data.buffer, delayMs, index: i }, [
+        data.buffer as ArrayBuffer,
+      ]);
+    } else {
+      const { indices, palette } = quantize(data);
+      frames.push({ indices, palette, delayMs });
+    }
 
     onProgress((i + 1) / (frameCount + 1)); // reserve the last tick for encode
     await nextTick(); // keep the UI responsive
@@ -300,7 +331,21 @@ export async function exportAnimatedGif(
     measureHost.remove();
   }
 
-  const bytes = encodeGif(outW, outH, frames, true);
+  let bytes: Uint8Array;
+  if (worker && !workerErr) {
+    bytes = await new Promise<Uint8Array>((resolve, reject) => {
+      worker!.onmessage = (ev) => {
+        if (ev.data?.type === "done") resolve(ev.data.bytes as Uint8Array);
+        else if (ev.data?.type === "error") reject(new Error(String(ev.data.message)));
+      };
+      worker!.onerror = (ev) => reject(new Error(ev.message || "GIF worker crashed"));
+      worker!.postMessage({ type: "encode", w: outW, h: outH });
+    }).finally(() => worker!.terminate());
+  } else {
+    worker?.terminate();
+    if (workerErr) throw new Error(`GIF encode failed: ${workerErr}`);
+    bytes = encodeGif(outW, outH, frames, true);
+  }
   onProgress(1);
   return new Blob([bytes.buffer as ArrayBuffer], { type: "image/gif" });
 }
