@@ -3,24 +3,31 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "noddle-mcp"
+name = "noddle-draw-mcp"
 version = "1.0.0"
-description = "MCP server (stdio) for noddle draw boards — stdlib-only, no runtime dependencies."
+description = "MCP server (stdio) for noddle draw boards. Stdlib-only, no runtime dependencies."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+authors = [{ name = "noddle contributors" }]
+keywords = ["mcp", "model-context-protocol", "diagram", "whiteboard", "noddle"]
 dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",
     "Environment :: Console",
     "License :: OSI Approved :: MIT License",
+    "Topic :: Multimedia :: Graphics :: Editors",
 ]
 
 [project.urls]
 Homepage = "https://draw.noddle.dev"
 Source = "https://github.com/noddle-dev/noddle-draw"
+Documentation = "https://github.com/noddle-dev/noddle-draw/tree/main/mcp"
 
+# `uvx noddle-draw-mcp` runs the script named after the package;
+# `noddle-mcp` stays as the historical alias.
 [project.scripts]
+noddle-draw-mcp = "noddle_mcp:main"
 noddle-mcp = "noddle_mcp:main"
 
 [tool.setuptools]

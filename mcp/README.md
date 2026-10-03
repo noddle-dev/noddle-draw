@@ -1,5 +1,7 @@
 # noddle draw MCP server
 
+<!-- mcp-name: io.github.noddle-dev/noddle-draw -->
+
 Lets an AI agent (Claude Code, Claude Desktop, or any MCP client) **work on a board
 alongside you**: read, create and edit boards, browse version history, and comment like
 any other collaborator.
@@ -48,11 +50,21 @@ or a project `.mcp.json` use the same shape:
 }
 ```
 
-**As a package** (`pyproject.toml` here, console script `noddle-mcp`):
+**From PyPI** (package `noddle-draw-mcp`, console scripts `noddle-draw-mcp` and `noddle-mcp`):
 
 ```bash
-uvx --from ./mcp noddle-mcp            # or: pipx install ./mcp && noddle-mcp
+claude mcp add noddle -- uvx noddle-draw-mcp
+# or: pipx install noddle-draw-mcp && noddle-draw-mcp
 ```
+
+**From a checkout** (`pyproject.toml` here):
+
+```bash
+uvx --from ./mcp noddle-draw-mcp       # or: pipx install ./mcp && noddle-draw-mcp
+```
+
+The server is also listed in the [official MCP Registry](https://registry.modelcontextprotocol.io)
+as `io.github.noddle-dev/noddle-draw` (see [Releasing](#releasing)).
 
 | Env | Default | |
 |---|---|---|
@@ -143,6 +155,24 @@ backend. It covers version negotiation (modern and legacy), schema validity, rea
 write tools, board-URL ids, view-only links, resources, prompts, BYOK header forwarding
 and error paths. It also asserts that stdout carries only JSON-RPC, that no request ever
 carries an `Authorization` header, and that a BYOK key never leaks into output or logs.
+
+## Releasing
+
+`mcp/server.json` is the registry listing; it points at the PyPI package `noddle-draw-mcp`.
+The registry verifies package ownership by finding the `mcp-name:` marker at the top of this
+README in the published PyPI description, so keep that comment.
+
+1. Bump the version in **three** places, all equal: `__version__` in `noddle_mcp.py`,
+   `version` in `pyproject.toml`, and both `version` fields in `server.json`. Registry
+   versions are immutable; a metadata-only fix uses a suffix such as `1.0.0-1`.
+2. Push a tag `mcp-v<version>` (for example `mcp-v1.0.0`). The workflow
+   `.github/workflows/mcp-publish.yml` checks the versions match, runs the MCP tests,
+   publishes to PyPI through Trusted Publishing, waits until PyPI serves the release, and then
+   publishes `server.json` through `mcp-publisher login github-oidc`. Neither step needs a
+   stored secret.
+
+One-time setup: on PyPI, add a trusted publisher for project `noddle-draw-mcp` with owner
+`noddle-dev`, repository `noddle-draw`, workflow `mcp-publish.yml` and environment `pypi`.
 
 ## Notes
 
