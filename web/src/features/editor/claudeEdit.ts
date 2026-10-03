@@ -10,6 +10,7 @@
  * diagramStore.loadDiagram → broadcast live to every collab peer.
  */
 import { api } from "../../shared/api/client";
+import { withAiHints } from "../../shared/aiError";
 import type { DiagramEdge, DiagramNode } from "../../editor-core/diagram";
 import { useAppStore } from "../../state/appStore";
 import { commitHistoryNow } from "../../state/diagramHistory";
@@ -29,7 +30,7 @@ function errText(err: unknown): string {
       "server restart). Your board is unchanged — please send the message again."
     );
   }
-  return msg;
+  return withAiHints(msg);
 }
 
 // ---- concurrent-edit safe apply ----------------------------------------------

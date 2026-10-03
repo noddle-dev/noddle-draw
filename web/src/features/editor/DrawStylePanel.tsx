@@ -17,7 +17,8 @@ import { groupSelected, groupState, ungroupSelected } from "../../state/grouping
 import { arrangeSelection, flipSelection } from "../../state/arrange";
 import { DEFAULT_BRUSH, DRAW_STYLE_DEFAULTS, useEditorStore } from "../../state/editorStore";
 
-const STROKES = ["#2d3142", "#dc2626", "#16a34a", "#2563eb", "#eb6c36"];
+// Palette lives in editor-core (mirrored by the backend AI default — board_palette.py).
+import { FILLS, STROKES, STYLE_PAIRS } from "../../editor-core/diagram/palette";
 /** A #rrggbb for <input type=color> (it rejects names / rgba / "transparent"). */
 function toHex(v: string | undefined): string {
   return v && /^#[0-9a-f]{6}$/i.test(v) ? v : "#000000";
@@ -44,25 +45,6 @@ function ColorWell({ value, presets, label, onPick }: {
     </label>
   );
 }
-
-/** Stroke + matching pastel fill — built from the STROKES/FILLS above so a
- * preset always lands on swatches the rows can show as selected. */
-const STYLE_PAIRS: { name: string; stroke: string; fill: string }[] = [
-  { name: "Ink", stroke: "#2d3142", fill: "#ffffff" },
-  { name: "Red", stroke: "#dc2626", fill: "#fee2e2" },
-  { name: "Green", stroke: "#16a34a", fill: "#dcfce7" },
-  { name: "Blue", stroke: "#2563eb", fill: "#dbeafe" },
-  { name: "Ember", stroke: "#eb6c36", fill: "#fef9c3" },
-];
-
-const FILLS: { v: string; label: string }[] = [
-  { v: "transparent", label: "Transparent" },
-  { v: "#ffffff", label: "White" },
-  { v: "#fee2e2", label: "Soft red" },
-  { v: "#dcfce7", label: "Soft green" },
-  { v: "#dbeafe", label: "Soft blue" },
-  { v: "#fef9c3", label: "Soft yellow" },
-];
 
 /** Excalidraw-style S/M/L/XL — M is the renderer default (14px). */
 const FONT_SIZES = [

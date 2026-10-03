@@ -28,16 +28,20 @@ from collections import deque
 
 from app.services.ai import ProviderSettings
 
-# Verified free (price 0) on OpenRouter as of 2026-07. A comma-separated
-# FALLBACK CHAIN: free models are shared and individually rate-limited
-# upstream, so the OpenRouter call carries the whole list (`models` array) and
-# routes to the first one with capacity. Primary = vision + best JSON; the
-# rest are text-strong alternates. POOL_MODEL env overrides (same format).
-# NOTE: OpenRouter accepts at most 3 entries in the `models` array.
+# Verified free (price 0) on OpenRouter as of 2026-10-03 (the 2026-07 chain
+# had rotted: 2 of its 3 slugs were gone, leaving one rate-limited model).
+# A comma-separated FALLBACK CHAIN: free models are shared and individually
+# rate-limited upstream. OpenRouter accepts at most 3 entries in its `models`
+# array, so the chain is tried in GROUPS of 3 (services/ai.py) — a 429 or a
+# dead slug moves on to the next group. Vision + structured-output capable
+# first. POOL_MODEL env overrides (same format).
 DEFAULT_POOL_MODEL = (
+    "qwen/qwen3.8-27b:free,"
+    "google/gemma-4-31b-it:free,"
     "google/gemma-4-26b-a4b-it:free,"
-    "openai/gpt-oss-120b:free,"
-    "meta-llama/llama-3.3-70b-instruct:free"
+    "dots-studio/dots-3-note-preview:free,"
+    "nvidia/nemotron-3-super-120b-a12b:free,"
+    "thinkingmachines/inkling:free"
 )
 
 _TURNSTILE_VERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
