@@ -3,7 +3,9 @@
  *
  * A read-only reference of every editor binding, grouped by task. Opened by
  * the topbar "?" button or the `?` key; closed by Esc / clicking the backdrop.
- * Keep the rows in sync with the handlers in features/canvas/Canvas.tsx.
+ * The rows must agree with the key handlers. The handlers are in
+ * features/canvas/Canvas.tsx, features/editor/EditorScreen.tsx (present mode),
+ * and the label editors in features/diagram/ and features/canvas/.
  */
 import { useEffect } from "react";
 import { useAppStore } from "../../state/appStore";
@@ -13,6 +15,10 @@ const MOD =
   typeof navigator !== "undefined" && /Mac|iP(hone|ad|od)/.test(navigator.platform)
     ? "⌘"
     : "Ctrl";
+
+/** Mac keyboards do not have a Delete key. Users press Backspace. The handler
+ * accepts the two keys, so show the key that the keyboard has. */
+const DEL = MOD === "⌘" ? "⌫" : "Del";
 
 type Row = { keys: string[]; label: string };
 type Group = { title: string; rows: Row[] };
@@ -24,7 +30,7 @@ const GROUPS: Group[] = [
       { keys: [MOD, "Z"], label: "Undo" },
       { keys: [MOD, "⇧", "Z"], label: "Redo" },
       { keys: [MOD, "A"], label: "Select everything" },
-      { keys: ["Del"], label: "Delete selection" },
+      { keys: [DEL], label: "Delete selection" },
       { keys: [MOD, "D"], label: "Duplicate in place" },
       { keys: [MOD, "C"], label: "Copy" },
       { keys: [MOD, "X"], label: "Cut" },
@@ -77,6 +83,28 @@ const GROUPS: Group[] = [
       { keys: ["type"], label: "Edit a selected shape's label" },
       { keys: ["dbl-click"], label: "Add a text element on empty canvas" },
       { keys: ["Esc"], label: "Clear selection · exit focus mode" },
+      { keys: ["?"], label: "Open this cheat sheet" },
+    ],
+  },
+  // The label editors own these keys, not Canvas.tsx. A shape label and a text
+  // element are both diagram nodes. They keep plain Enter for a line break, so
+  // they need the modifier to finish. A connector label has one line only.
+  {
+    title: "Editing text",
+    rows: [
+      { keys: [MOD, "Enter"], label: "Finish a shape · text label (Enter adds a line)" },
+      { keys: ["Enter"], label: "Finish a connector label" },
+      { keys: ["Esc"], label: "Cancel the edit" },
+    ],
+  },
+  // Present mode runs its own handler in EditorScreen.tsx. Hidden pages are not
+  // slides, so the arrows move through the visible pages only.
+  {
+    title: "Presentation",
+    rows: [
+      { keys: ["→"], label: "Next slide" },
+      { keys: ["←"], label: "Previous slide" },
+      { keys: ["Esc"], label: "Exit presentation" },
     ],
   },
 ];
