@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.noddle-dev/noddle-draw",
+  "name": "dev.noddle/draw",
   "title": "noddle draw",
   "description": "Read, create and edit open-source noddle draw diagram boards, browse versions and comment.",
   "version": "1.0.0",
@@ -12,17 +12,30 @@
     "subfolder": "mcp"
   },
   "icons": [
-    { "src": "https://draw.noddle.dev/logo-512.png", "mimeType": "image/png", "sizes": ["512x512"] },
-    { "src": "https://draw.noddle.dev/favicon.svg", "mimeType": "image/svg+xml", "sizes": ["any"] }
+    {
+      "src": "https://draw.noddle.dev/logo-512.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    },
+    {
+      "src": "https://draw.noddle.dev/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
   ],
   "packages": [
     {
-      "registryType": "pypi",
-      "registryBaseUrl": "https://pypi.org",
-      "identifier": "noddle-draw-mcp",
+      "registryType": "mcpb",
+      "identifier": "https://github.com/noddle-dev/noddle-draw/releases/download/mcpb-v1.0.0/noddle-draw.mcpb",
+      "fileSha256": "12d4b05300b53cee0e75bae30fbd7e23df60f277aa752665b93e2d2947fc9147",
       "version": "1.0.0",
-      "runtimeHint": "uvx",
-      "transport": { "type": "stdio" },
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
         {
           "name": "NODDLE_BASE_URL",
@@ -39,7 +52,13 @@
         {
           "name": "NODDLE_AI_PROVIDER",
           "description": "Optional bring-your-own-key provider for generate_diagram.",
-          "choices": ["claude", "openai", "gemini", "openrouter", "custom"],
+          "choices": [
+            "claude",
+            "openai",
+            "gemini",
+            "openrouter",
+            "custom"
+          ],
           "isRequired": false
         },
         {

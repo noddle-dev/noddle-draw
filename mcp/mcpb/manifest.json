@@ -1,0 +1,64 @@
+{
+  "manifest_version": "0.3",
+  "name": "noddle-draw",
+  "display_name": "noddle draw",
+  "version": "1.0.0",
+  "description": "Read, create and edit open-source noddle draw diagram boards, browse versions and comment.",
+  "long_description": "MCP server for noddle draw (draw.noddle.dev) — the open-source, no-sign-up whiteboard. Agents can list and read boards, create and update diagrams (nodes, edges, pages), browse versions and post comments. Point NODDLE_BASE_URL at your own instance when self-hosting. Python standard library only — no install step.",
+  "author": { "name": "noddle", "url": "https://draw.noddle.dev" },
+  "homepage": "https://draw.noddle.dev",
+  "repository": { "type": "git", "url": "https://github.com/noddle-dev/noddle-draw" },
+  "documentation": "https://github.com/noddle-dev/noddle-draw/tree/main/mcp",
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "python",
+    "entry_point": "server/noddle_mcp.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": ["${__dirname}/server/noddle_mcp.py"],
+      "env": {
+        "NODDLE_BASE_URL": "${user_config.base_url}",
+        "NODDLE_AGENT_NAME": "${user_config.agent_name}",
+        "NODDLE_AI_PROVIDER": "${user_config.ai_provider}",
+        "NODDLE_AI_KEY": "${user_config.ai_key}"
+      }
+    }
+  },
+  "user_config": {
+    "base_url": {
+      "type": "string",
+      "title": "noddle draw URL",
+      "description": "Origin of the noddle draw instance (your own when self-hosting).",
+      "default": "https://draw.noddle.dev",
+      "required": false
+    },
+    "agent_name": {
+      "type": "string",
+      "title": "Agent name",
+      "description": "Display name on the agent's comments and version snapshots.",
+      "default": "MCP agent",
+      "required": false
+    },
+    "ai_provider": {
+      "type": "string",
+      "title": "AI provider (optional)",
+      "description": "Bring-your-own-key provider for generate_diagram: claude, openai, gemini, openrouter or custom. Leave empty to use the instance's free pool.",
+      "default": "",
+      "required": false
+    },
+    "ai_key": {
+      "type": "string",
+      "title": "AI provider key (optional)",
+      "description": "Sent only to the noddle draw instance per call; never stored.",
+      "sensitive": true,
+      "default": "",
+      "required": false
+    }
+  },
+  "keywords": ["diagram", "whiteboard", "excalidraw", "architecture", "flowchart", "open-source"],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "python": ">=3.10" }
+  }
+}
