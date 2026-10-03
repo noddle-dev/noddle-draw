@@ -46,7 +46,7 @@ export interface Artboard {
  * node starts an edge drag. "draw" = draw-shape mode: the armed shape (the
  * editor store's drawSpec) is created by dragging A→B on the canvas — a plain
  * click drops it at the default size. Both stay armed until Esc / Select. */
-export type Tool = "select" | "pan" | "arrow" | "draw";
+export type Tool = "select" | "pan" | "arrow" | "draw" | "text" | "pen" | "eraser" | "laser";
 
 /** Resize handle ids (corners). */
 export type HandleId = "nw" | "ne" | "se" | "sw";

@@ -1765,3 +1765,35 @@ code { background: var(--panel-2); border: 1px solid var(--border); padding: 1px
   background: var(--panel-2); border: 1px solid var(--border-faint);
   border-bottom-width: 2px; border-radius: 4px; padding: 0 4px;
 }
+
+/* ---- text-edit hint, pen /
+   eraser / text / laser tool cursors, laser trail, pen panel controls ---- */
+.text-edit-hint {
+  position: absolute; z-index: 61; transform: translateX(-50%); pointer-events: none;
+  background: var(--text); color: #fff; font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  white-space: nowrap; opacity: .88; box-shadow: var(--shadow-float);
+}
+/* Pen cursor = the tool itself, tip on the hotspot (drawing point). */
+.canvas-host.pen-tool.brush-pen, .canvas-host.pen-tool.brush-pen * { cursor: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2724%27%20height%3D%2724%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M3%2021%20L4.2%2016.2%20L16.8%203.6%20L20.4%207.2%20L7.8%2019.8%20Z%27%20fill%3D%27white%27%20stroke%3D%27%232d3142%27%20stroke-width%3D%271.5%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M14.6%205.8%20L18.2%209.4%27%20stroke%3D%27%232d3142%27%20stroke-width%3D%271.5%27/%3E%3Cpath%20d%3D%27M3%2021%20L4.2%2016.2%20L7.8%2019.8%20Z%27%20fill%3D%27%232d3142%27/%3E%3C/svg%3E") 3 21, crosshair; }
+.canvas-host.pen-tool.brush-marker, .canvas-host.pen-tool.brush-marker * { cursor: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2724%27%20height%3D%2724%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M2.5%2021.5%20L3.5%2017.5%20L6.5%2020.5%20Z%27%20fill%3D%27%232d3142%27/%3E%3Cpath%20d%3D%27M3.5%2017.5%20L13.5%207.5%20L16.5%2010.5%20L6.5%2020.5%20Z%27%20fill%3D%27white%27%20stroke%3D%27%232d3142%27%20stroke-width%3D%271.5%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M13.5%207.5%20L17%204%20C17.8%203.2%2019.2%203.2%2020%204%20C20.8%204.8%2020.8%206.2%2020%207%20L16.5%2010.5%20Z%27%20fill%3D%27%232d3142%27/%3E%3C/svg%3E") 3 21, crosshair; }
+.canvas-host.pen-tool.brush-highlighter, .canvas-host.pen-tool.brush-highlighter * { cursor: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2724%27%20height%3D%2724%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20d%3D%27M2%2022%20L3%2018%20L7%2022%20Z%27%20fill%3D%27%23eb6c36%27/%3E%3Cpath%20d%3D%27M3%2018%20L5%2016%20L9%2020%20L7%2022%20Z%27%20fill%3D%27%23eb6c36%27%20stroke%3D%27%232d3142%27%20stroke-width%3D%271.3%27/%3E%3Cpath%20d%3D%27M5%2016%20L14%207%20L18%2011%20L9%2020%20Z%27%20fill%3D%27white%27%20stroke%3D%27%232d3142%27%20stroke-width%3D%271.5%27%20stroke-linejoin%3D%27round%27/%3E%3Cpath%20d%3D%27M14%207%20L17.5%203.5%20L21.5%207.5%20L18%2011%20Z%27%20fill%3D%27%232d3142%27/%3E%3C/svg%3E") 3 21, crosshair; }
+.canvas-host.eraser-tool, .canvas-host.eraser-tool * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Ccircle cx='10' cy='10' r='6' fill='white' stroke='%232d3142' stroke-width='1.5'/%3E%3C/svg%3E") 10 10, crosshair;
+}
+.canvas-host.text-tool, .canvas-host.text-tool * { cursor: text; }
+.ds-opt-wide { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; font-size: 12px; width: auto !important; }
+.ds-well {
+  position: relative; overflow: hidden; cursor: pointer;
+  background: conic-gradient(#ef4444, #f59e0b, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444);
+}
+.ds-well:not(.custom)::after {
+  content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--panel);
+}
+.ds-well input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: none; padding: 0; }
+.ds-val { float: right; font-weight: 500; color: var(--faint); }
+/* ---- Laser pointer (K): screen-space fading trail, never saved ---- */
+.canvas-host.laser-tool, .canvas-host.laser-tool * { cursor: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2720%27%20height%3D%2720%27%3E%3Ccircle%20cx%3D%2710%27%20cy%3D%2710%27%20r%3D%275%27%20fill%3D%27%23ff3b30%27%20stroke%3D%27white%27%20stroke-width%3D%272%27/%3E%3C/svg%3E") 10 10, crosshair; }
+.laser-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 30; overflow: visible; }
+.laser-layer path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.laser-layer .laser-glow { stroke: rgba(255, 59, 48, 0.28); stroke-width: 10; filter: blur(2px); }
+.laser-layer .laser-core { stroke: #ff3b30; stroke-width: 3.2; }

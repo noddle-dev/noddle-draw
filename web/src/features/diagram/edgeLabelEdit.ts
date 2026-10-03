@@ -2,7 +2,7 @@
  * features/diagram/edgeLabelEdit — inline label editing for a connector.
  *
  * Mirrors nodeTextEdit: an absolutely-positioned <input> over the edge midpoint
- * (in stage-pixel space), committing on Enter/blur, cancel on Escape. The label
+ * (in stage-pixel space), committing on Enter/blur/Escape (Esc saves too — ⌘Z reverts). The label
  * is stored as a plain string and rendered as a React text node (never markup),
  * so no escaping is needed.
  */
@@ -45,7 +45,7 @@ export function beginEdgeLabelEdit(edgeId: string, midContent: Vec, blockId?: st
 
   useEditorStore
     .getState()
-    .setStatus("Editing connector label · Enter to save · Esc to cancel.");
+    .setStatus("Editing connector label · Enter or Esc saves.");
 
   let done = false;
   const finish = (commit: boolean) => {
@@ -69,7 +69,7 @@ export function beginEdgeLabelEdit(edgeId: string, midContent: Vec, blockId?: st
       finish(true);
     } else if (ev.key === "Escape") {
       ev.preventDefault();
-      finish(false);
+      finish(true); // save, never discard — ⌘Z reverts
     }
   });
 }

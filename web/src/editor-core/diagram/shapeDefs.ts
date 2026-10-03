@@ -135,7 +135,7 @@ export const SHAPE_DEFS: ShapeDef[] = [
   // ---- misc (special palette handling) --------------------------------------
   { kind: "sticky", group: "misc", label: "Sticky note", glyph: "▧", size: { w: 150, h: 130 }, text: "" },
   { kind: "actor", group: "misc", label: "Actor", glyph: "☻", size: { w: 76, h: 120 }, text: "Actor" },
-  { kind: "icon", group: "misc", label: "Icon", glyph: "▣", size: { w: 104, h: 112 }, text: "" },
+  { kind: "icon", group: "misc", label: "Icon", glyph: "▣", size: { w: 64, h: 64 }, text: "" },
 ];
 
 export const SHAPE_DEF_BY_KIND: Partial<Record<NodeKind, ShapeDef>> = Object.fromEntries(

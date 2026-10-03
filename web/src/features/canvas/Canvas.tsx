@@ -24,7 +24,7 @@ import {
   type Rect,
   type SceneObject,
 } from "../../editor-core";
-import { useEditorStore } from "../../state/editorStore";
+import { DRAW_STYLE_DEFAULTS, useEditorStore } from "../../state/editorStore";
 import { useAppStore } from "../../state/appStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import {
@@ -35,7 +35,10 @@ import { useTextEdit } from "./useTextEdit";
 import { panState } from "../../state/panState";
 import { DiagramLayer } from "../diagram";
 import { beginNodeTextEdit } from "../diagram/nodeTextEdit";
-import { edgePath, polylineIntersectsRect } from "../../editor-core/diagram";
+import { mintEdgeId } from "../diagram/ConnectionPorts";
+import { groupSelected, ungroupSelected } from "../../state/grouping";
+import { arrangeSelection, copyStyles, flipSelection, hasCopiedStyles, pasteStyles } from "../../state/arrange";
+import { edgePath, normaliseStroke, snapConnect, type Attachment } from "../../editor-core/diagram";
 
 type DragHandlers = {
   move: (e: PointerEvent) => void;
@@ -58,6 +61,8 @@ export function Canvas() {
   const selection = useEditorStore((s) => s.selection);
   const contentRev = useEditorStore((s) => s.contentRev);
   const tool = useEditorStore((s) => s.tool);
+  // Pen cursor follows the brush (nib / marker / highlighter tip).
+  const penType = useEditorStore((s) => s.penStyle.brush?.type ?? "pen");
   const gridOn = useAppStore((s) => s.gridOn);
   const pageBackdrop = useAppStore((s) => s.pageBackdrop);
   const diagramNodeCount = useDiagramStore((s) => Object.keys(s.nodes).length);
@@ -193,17 +198,17 @@ export function Canvas() {
               (n) => n.x < x1 && n.x + n.w > x0 && n.y < y1 && n.y + n.h > y0,
             )
             .map((n) => n.id);
-          const rect = { x0, y0, x1, y1 };
+          // Arrows join when their WHOLE route sits inside the box (Excalidraw)
+          // — a connector merely crossing the marquee stays out.
+          const inBox = (p: { x: number; y: number }) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
           const edgeHits = Object.values(ds.edges)
             .filter((ed) => {
               const g = edgePath(ed, ds.nodes);
-              return g ? polylineIntersectsRect(g.points, rect) : false;
+              return !!g && g.points.every(inBox);
             })
             .map((ed) => ed.id);
           const dsBase = ev.shiftKey ? ds.diagramSelection : [];
-          ds.setDiagramSelection([
-            ...new Set([...dsBase, ...nodeHits, ...edgeHits]),
-          ]);
+          ds.setDiagramSelection([...new Set([...dsBase, ...nodeHits, ...edgeHits])]);
         },
       };
     };
@@ -213,17 +218,31 @@ export function Canvas() {
     // is created once the pointer travels 6px and then resized with the drag,
     // so the preview is pixel-true (kind, colors, label). A plain click
     // (never crossing 6px) creates NOTHING, so accidental taps stay
-    // consequence-free. The tool stays armed (sticky); Esc/Select disarms.
+    // consequence-free. Modifiers follow Excalidraw: Shift = square/circle,
+    // Alt = grow from the press point as CENTER. A committed draw drops back
+    // to Select unless the tool lock (Q) is on.
     const startDrawShape = (e: PointerEvent) => {
       stage.setPointerCapture(e.pointerId);
       const p0 = screenToContent(content, e.clientX, e.clientY);
       let createdId: string | null = null;
       const frame = (ev: PointerEvent) => {
         const p1 = screenToContent(content, ev.clientX, ev.clientY);
-        const x = Math.min(p0.x, p1.x);
-        const y = Math.min(p0.y, p1.y);
-        const w = Math.max(20, Math.abs(p1.x - p0.x));
-        const h = Math.max(20, Math.abs(p1.y - p0.y));
+        let dx = p1.x - p0.x;
+        let dy = p1.y - p0.y;
+        if (ev.shiftKey) {
+          const m = Math.max(Math.abs(dx), Math.abs(dy));
+          dx = (dx < 0 ? -1 : 1) * m;
+          dy = (dy < 0 ? -1 : 1) * m;
+        }
+        if (ev.altKey) {
+          const hw = Math.max(10, Math.abs(dx));
+          const hh = Math.max(10, Math.abs(dy));
+          return { x: p0.x - hw, y: p0.y - hh, w: hw * 2, h: hh * 2 };
+        }
+        const x = Math.min(p0.x, p0.x + dx);
+        const y = Math.min(p0.y, p0.y + dy);
+        const w = Math.max(20, Math.abs(dx));
+        const h = Math.max(20, Math.abs(dy));
         return { x, y, w, h };
       };
       dragRef.current = {
@@ -239,12 +258,11 @@ export function Canvas() {
               spec.kind,
               { x: box.x + box.w / 2, y: box.y + box.h / 2 },
               {
+                ...DRAW_STYLE_DEFAULTS,
                 ...spec.init,
-                // Draw-tool defaults: NO auto label (a drawn shape starts
-                // blank — dblclick/type to name it) and a soft 3px corner
-                // radius, both overridable by the style panel (drawStyle).
+                // A drawn shape starts blank (dblclick/type to name it); its
+                // corner radius comes from DRAW_STYLE_DEFAULTS like the rest.
                 text: "",
-                cornerRadius: 3,
                 ...s().drawStyle,
                 ...box,
               },
@@ -254,7 +272,272 @@ export function Canvas() {
           }
         },
         up: () => {
-          /* click without a drag: no node was minted, nothing to do */
+          // A click without a drag minted nothing — keep the tool armed.
+          if (createdId) s().finishToolUse();
+        },
+      };
+    };
+
+    // Free text label at a screen point (Text tool click / empty-canvas
+    // dblclick, Excalidraw): a borderless transparent box wearing the panel's
+    // TEXT picks, straight into typing. One that ends up empty is removed.
+    const dropTextAt = (clientX: number, clientY: number) => {
+      const ds = useDiagramStore.getState();
+      ds.setDiagramMode(true);
+      const st = { ...DRAW_STYLE_DEFAULTS, ...s().drawStyle };
+      const fontSize = st.fontSize ?? 14;
+      // OSS keeps its dedicated shapeless "text" kind for free labels.
+      const id = ds.addNodeAt("text", screenToContent(content, clientX, clientY), {
+        w: 160,
+        h: Math.max(40, Math.round(fontSize * 2)),
+        text: "",
+        fontSize: st.fontSize,
+        sketch: st.sketch,
+        bold: st.bold,
+        italic: st.italic,
+        underline: st.underline,
+        fontFamily: st.fontFamily,
+        textAlign: st.textAlign,
+        textColor: st.textColor,
+      });
+      const created = useDiagramStore.getState().nodes[id];
+      if (!created) return;
+      beginNodeTextEdit(created, {
+        onEnd: (text) => {
+          const cur = useDiagramStore.getState();
+          if (!text.trim()) {
+            cur.setDiagramSelection([id]);
+            cur.deleteSelectedDiagram();
+            return;
+          }
+          // Shrink-wrap the box to the typed text (Excalidraw) so the
+          // invisible frame never grabs presses far from the letters.
+          requestAnimationFrame(() => fitTextBox(id));
+        },
+      });
+    };
+
+    /** Resize a borderless text node to its rendered label, anchored per align. */
+    const fitTextBox = (id: string) => {
+      const ds = useDiagramStore.getState();
+      const n = ds.nodes[id];
+      const texts = [...host.querySelectorAll<SVGGraphicsElement>(`[data-diagram-node="${id}"] text`)]
+        .filter((t) => !t.closest("[data-editor-only]"));
+      if (!n || !texts.length) return;
+      const boxes = texts.map((t) => t.getBBox());
+      const w = Math.max(24, Math.ceil(Math.max(...boxes.map((b) => b.x + b.width)) - Math.min(...boxes.map((b) => b.x)) + 16));
+      const h = Math.max(24, Math.ceil(Math.max(...boxes.map((b) => b.y + b.height)) - Math.min(...boxes.map((b) => b.y)) + 12));
+      const x = n.textAlign === "left" ? n.x : n.textAlign === "right" ? n.x + n.w - w : n.x + (n.w - w) / 2;
+      ds.updateNode(id, { x, y: n.y + (n.h - h) / 2, w, h });
+    };
+
+    // Text tool: the label drops on pointer UP — by then the browser's own
+    // mousedown focus change is over, so it can't blur the fresh editor.
+    const startDropText = (e: PointerEvent) => {
+      dragRef.current = {
+        move: () => {},
+        up: (ev) => {
+          if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > 6) return;
+          dropTextAt(ev.clientX, ev.clientY);
+          s().finishToolUse();
+        },
+      };
+    };
+
+    // Pen (Excalidraw freedraw): samples the pointer into ONE freedraw node
+    // whose box/points are re-normalised as the stroke grows (rAF-throttled).
+    // Points closer than ~1.5 screen px are dropped. The pen stays armed.
+    const startPen = (e: PointerEvent) => {
+      stage.setPointerCapture(e.pointerId);
+      const abs = [screenToContent(content, e.clientX, e.clientY)];
+      let id: string | null = null;
+      let frame = 0;
+      const minStep = 1.5 / (s().cam.z || 1);
+      const flush = () => {
+        frame = 0;
+        if (abs.length < 2) return;
+        const ds = useDiagramStore.getState();
+        const box = normaliseStroke(abs);
+        if (!id) {
+          ds.setDiagramMode(true);
+          const pen = s().penStyle;
+          id = ds.addNodeAt("freedraw", { x: box.x + box.w / 2, y: box.y + box.h / 2 }, {
+            ...box,
+            text: "",
+            fill: "transparent",
+            stroke: pen.stroke,
+            strokeWidth: pen.strokeWidth,
+            opacity: pen.opacity,
+            pen: { ...pen.brush },
+          });
+          ds.setDiagramSelection([]); // no selection chrome flickering while inking
+        } else {
+          ds.updateNode(id, box);
+        }
+      };
+      dragRef.current = {
+        move: (ev) => {
+          const p = screenToContent(content, ev.clientX, ev.clientY);
+          const last = abs[abs.length - 1];
+          if (Math.hypot(p.x - last.x, p.y - last.y) < minStep) return;
+          abs.push(p);
+          if (!frame) frame = requestAnimationFrame(flush);
+        },
+        up: () => {
+          if (frame) cancelAnimationFrame(frame);
+          flush();
+        },
+      };
+    };
+
+    // Eraser (Excalidraw): sweep to MARK objects (they fade), release to
+    // delete them all in one undo step; holding ⌥/Alt while sweeping
+    // un-marks instead. Sampling every ~4px along the motion so a fast flick
+    // still catches thin strokes in between pointer events.
+    const startErase = (e: PointerEvent) => {
+      stage.setPointerCapture(e.pointerId);
+      const marked = new Set<string>();
+      const hitAt = (cx: number, cy: number, revert: boolean) => {
+        for (const el of document.elementsFromPoint(cx, cy)) {
+          if ((el as Element).closest("[data-editor-only]")) continue;
+          const n = (el as Element).closest("[data-diagram-node]")?.getAttribute("data-diagram-node");
+          const ed = (el as Element).closest("[data-diagram-edge]")?.getAttribute("data-diagram-edge");
+          const id = n ?? ed;
+          if (!id) continue;
+          if (revert) marked.delete(id);
+          else marked.add(id);
+          break; // topmost object only, like a real eraser tip
+        }
+      };
+      let last = { x: e.clientX, y: e.clientY };
+      hitAt(last.x, last.y, e.altKey);
+      s().setEraseMarked([...marked]);
+      dragRef.current = {
+        move: (ev) => {
+          const steps = Math.max(1, Math.ceil(Math.hypot(ev.clientX - last.x, ev.clientY - last.y) / 4));
+          for (let i = 1; i <= steps; i++) {
+            hitAt(last.x + ((ev.clientX - last.x) * i) / steps, last.y + ((ev.clientY - last.y) * i) / steps, ev.altKey);
+          }
+          last = { x: ev.clientX, y: ev.clientY };
+          s().setEraseMarked([...marked]);
+        },
+        up: () => {
+          s().setEraseMarked([]);
+          if (!marked.size) return;
+          const ds = useDiagramStore.getState();
+          ds.setDiagramSelection([...marked].filter((id) => ds.nodes[id] || ds.edges[id]));
+          ds.deleteSelectedDiagram();
+        },
+      };
+    };
+
+    // Laser pointer (Excalidraw K): a red trail in SCREEN space that fades
+    // ~0.7s behind the pointer — for presenting/explaining, never saved and
+    // never selects anything. Drawn imperatively into an overlay <svg> so a
+    // fast wiggle doesn't re-render React.
+    const startLaser = (e: PointerEvent) => {
+      stage.setPointerCapture(e.pointerId);
+      const host = hostRef.current;
+      if (!host) return;
+      const r0 = host.getBoundingClientRect();
+      const NS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(NS, "svg");
+      svg.setAttribute("class", "laser-layer");
+      svg.setAttribute("data-editor-only", "1");
+      const glow = document.createElementNS(NS, "path");
+      glow.setAttribute("class", "laser-glow");
+      const core = document.createElementNS(NS, "path");
+      core.setAttribute("class", "laser-core");
+      svg.append(glow, core);
+      host.appendChild(svg);
+      const LIFE = 700;
+      const pts: { x: number; y: number; t: number }[] = [];
+      let down = true;
+      let frame = 0;
+      const add = (ev: PointerEvent) => pts.push({ x: ev.clientX - r0.left, y: ev.clientY - r0.top, t: performance.now() });
+      const draw = () => {
+        const now = performance.now();
+        while (pts.length && now - pts[0].t > LIFE) pts.shift();
+        const d = pts.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+        glow.setAttribute("d", d);
+        core.setAttribute("d", d);
+        if (pts.length || down) frame = requestAnimationFrame(draw);
+        else svg.remove();
+      };
+      add(e);
+      frame = requestAnimationFrame(draw);
+      dragRef.current = {
+        move: (ev) => add(ev),
+        up: () => {
+          down = false;
+          if (!frame) svg.remove();
+        },
+      };
+    };
+
+    // Text tool pressed on an existing shape → edit THAT shape's label (on
+    // pointer up, for the same focus reason as startDropText).
+    const startEditLabel = (e: PointerEvent, nodeId: string) => {
+      dragRef.current = {
+        move: () => {},
+        up: (ev) => {
+          if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > 6) return;
+          const n = useDiagramStore.getState().nodes[nodeId];
+          if (!n) return;
+          useDiagramStore.getState().setDiagramSelection([nodeId]);
+          beginNodeTextEdit(n);
+          s().finishToolUse();
+        },
+      };
+    };
+
+    // Arrow tool on EMPTY canvas (Excalidraw): dragging draws a free-standing
+    // arrow from the press point; the head binds to a shape when released
+    // near one (the same magnet port-drawn connectors use). Shape borders keep
+    // their own connect gesture (ConnectionPorts). A plain click draws nothing.
+    const startDrawArrow = (e: PointerEvent) => {
+      stage.setPointerCapture(e.pointerId);
+      const p0 = screenToContent(content, e.clientX, e.clientY);
+      let edgeId: string | null = null;
+      const targetOf = (ev: PointerEvent): Attachment => {
+        const p = screenToContent(content, ev.clientX, ev.clientY);
+        const hit = snapConnect(useDiagramStore.getState().nodes, p, undefined, 1 / (s().cam.z || 1));
+        // Magnet feedback (Excalidraw): outline the shape the head will bind to.
+        s().setBindHint(hit ? { nodeId: hit.nodeId, rel: hit.portRel ?? undefined } : null);
+        if (!hit) return { kind: "free", point: p };
+        return hit.portRel
+          ? { kind: "port", nodeId: hit.nodeId, rel: hit.portRel }
+          : { kind: "floating", nodeId: hit.nodeId };
+      };
+      dragRef.current = {
+        move: (ev) => {
+          const ds = useDiagramStore.getState();
+          if (edgeId) {
+            ds.updateEdge(edgeId, { target: targetOf(ev) });
+            return;
+          }
+          if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 6) return;
+          ds.setDiagramMode(true);
+          edgeId = mintEdgeId();
+          ds.addEdge({
+            id: edgeId,
+            source: { kind: "free", point: p0 },
+            target: targetOf(ev),
+            routing: "straight",
+            stroke: "#2d3142", // same ink as shapes (Excalidraw)
+            strokeWidth: 2,
+            endArrow: true,
+            startArrow: false,
+            animated: false,
+            // New arrows inherit the LAST style the user set on one.
+            ...s().edgeStyle,
+          });
+        },
+        up: () => {
+          s().setBindHint(null);
+          if (!edgeId) return;
+          useDiagramStore.getState().setDiagramSelection([edgeId]);
+          s().finishToolUse();
         },
       };
     };
@@ -262,14 +545,42 @@ export function Canvas() {
     const onPointerDown = (e: PointerEvent) => {
       // Space-pan overrides EVERYTHING — grips, shapes, ports all step aside
       // (they check panState themselves) and the hand drags the page.
+      // An armed draw/text tool wins over whatever is under the pointer
+      // (Excalidraw): a shape drawn ON or INSIDE an existing shape is a new
+      // shape, not a move of the old one; the Text tool on a shape edits that
+      // shape's label. NodeView/EdgeView stand down for these tools. This
+      // listener is NATIVE on the stage, so it runs before React's handlers.
+      if (!spaceDownRef.current && e.button === 0) {
+        if (s().tool === "draw" && s().drawSpec) {
+          startDrawShape(e);
+          return;
+        }
+        if (s().tool === "pen") {
+          startPen(e);
+          return;
+        }
+        if (s().tool === "eraser") {
+          startErase(e);
+          return;
+        }
+        if (s().tool === "laser") {
+          startLaser(e);
+          return;
+        }
+        if (s().tool === "text") {
+          const host = (e.target as Element).closest("[data-diagram-node]");
+          const nid = host?.getAttribute("data-diagram-node");
+          if (nid && useDiagramStore.getState().nodes[nid]) startEditLabel(e, nid);
+          else startDropText(e);
+          return;
+        }
+      }
       if (!spaceDownRef.current) {
         if ((e.target as Element).closest("[data-handle]")) return; // startResize owns it
         // The diagram layer owns its own pointer interactions (node drag, port
         // drag-to-connect, edge select). This handler is a NATIVE listener so it
-        // fires regardless of React stopPropagation — skip explicitly. EXCEPT
-        // in draw mode: a new shape is drawn even over existing objects
-        // (NodeView/ConnectionPorts step aside for the same reason).
-        if (s().tool !== "draw" && (e.target as Element).closest("#diagram-layer")) return;
+        // fires regardless of React stopPropagation — skip explicitly.
+        if ((e.target as Element).closest("#diagram-layer")) return;
       }
       const wantPan =
         s().tool === "pan" || e.button === 1 || spaceDownRef.current;
@@ -277,8 +588,8 @@ export function Canvas() {
         startPan(e);
         return;
       }
-      if (s().tool === "draw" && s().drawSpec && e.button === 0) {
-        startDrawShape(e);
+      if (s().tool === "arrow" && e.button === 0) {
+        startDrawArrow(e);
         return;
       }
       const obj = topObject(
@@ -335,42 +646,28 @@ export function Canvas() {
       s().setCam({ ...cam, x: cam.x - dx, y: cam.y - dy });
     };
 
-    // Null-safe: the parent walk can leave the SVG (host div → document),
-    // where tagName is undefined — treat those as "not a text element".
-    const localTag = (n: Node) =>
-      (n as Element).tagName?.replace(/^.*:/, "") ?? "";
+    // Walks stop at non-elements: a press on the bare stage climbs PAST
+    // `content` up to `document`, which has no tagName.
+    const isText = (n: Node | null) =>
+      !!n && n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName.replace(/^.*:/, "") === "text";
     const onDblClick = (e: MouseEvent) => {
       // Diagram nodes/edges own their own dblclick (inline text edit).
       if ((e.target as Element).closest("#diagram-layer")) return;
       let node: Node | null = document.elementFromPoint(e.clientX, e.clientY);
-      while (node && node !== content && localTag(node as Element) !== "text") {
+      while (node && node !== content && node.nodeType === Node.ELEMENT_NODE && !isText(node)) {
         node = node.parentNode;
       }
-      let textEl: SVGTextElement | null =
-        node && localTag(node as Element) === "text"
-          ? (node as SVGTextElement)
-          : null;
-      let obj: SceneObject | null = null;
-      if (!textEl) {
-        obj = topObject(
-          content,
-          document.elementFromPoint(e.clientX, e.clientY),
-        );
-        textEl = obj ? obj.querySelector("text") : null;
+      let textEl: SVGTextElement | null = isText(node) ? (node as SVGTextElement) : null;
+      const obj = textEl
+        ? null
+        : topObject(content, document.elementFromPoint(e.clientX, e.clientY));
+      if (!textEl && obj) textEl = obj.querySelector("text");
+      if (!textEl && obj) {
+        s().setStatus("This object has no text to edit.");
+        return;
       }
       if (!textEl) {
-        if (obj) {
-          s().setStatus("This object has no text to edit.");
-          return;
-        }
-        // Empty canvas: double-click mints a standalone TEXT element at the
-        // cursor and opens its editor (draw.io-style "add text").
-        const p = screenToContent(content, e.clientX, e.clientY);
-        const ds = useDiagramStore.getState();
-        ds.setDiagramMode(true);
-        const id = ds.addNodeAt("text", p, { text: "" });
-        const created = useDiagramStore.getState().nodes[id];
-        if (created) beginNodeTextEdit(created);
+        dropTextAt(e.clientX, e.clientY); // empty canvas → new text label
         return;
       }
       beginTextEdit(textEl);
@@ -446,10 +743,30 @@ export function Canvas() {
         const ds = useDiagramStore.getState();
         if (ds.diagramSelection.some((id) => ds.nodes[id])) {
           e.preventDefault();
-          if (e.shiftKey) ds.ungroupSelection();
-          else ds.groupSelection();
+          if (e.shiftKey) ungroupSelected();
+          else groupSelected();
         }
-      } else if (meta && (e.key.toLowerCase() === "c" || e.key.toLowerCase() === "x")) {
+      } else if (meta && e.altKey && (e.code === "KeyC" || e.code === "KeyV")) {
+        // ⌘⌥C / ⌘⌥V copy / paste STYLES (Excalidraw). e.code — ⌥ remaps e.key on macOS.
+        e.preventDefault();
+        if (e.code === "KeyC") {
+          if (copyStyles()) s().setStatus("Styles copied — ⌘⌥V to paste them onto another shape.", "ok");
+        } else if (!pasteStyles()) {
+          s().setStatus(hasCopiedStyles() ? "Select shapes to paste styles onto." : "Copy styles first with ⌘⌥C.");
+        }
+      } else if (meta && (e.code === "BracketLeft" || e.code === "BracketRight")) {
+        // ⌘[ / ⌘] one step backward/forward, with ⇧ all the way to back/front.
+        const ds = useDiagramStore.getState();
+        if (ds.diagramSelection.length) {
+          e.preventDefault();
+          const fwd = e.code === "BracketRight";
+          arrangeSelection(e.shiftKey ? (fwd ? "front" : "back") : fwd ? "forward" : "backward");
+        }
+      } else if (!meta && !e.altKey && e.shiftKey && (e.code === "KeyH" || e.code === "KeyV") && useDiagramStore.getState().diagramSelection.length) {
+        // ⇧H / ⇧V flip the selection horizontally / vertically (Excalidraw).
+        e.preventDefault();
+        flipSelection(e.code === "KeyH" ? "h" : "v");
+      } else if (meta && !e.shiftKey && (e.key.toLowerCase() === "c" || e.key.toLowerCase() === "x")) {
         // ⌘C copy / ⌘X cut the selected shapes+connectors (in-app clipboard).
         const ds = useDiagramStore.getState();
         if (ds.diagramSelection.length && ds.copySelection()) {
@@ -464,6 +781,13 @@ export function Canvas() {
         const before = ds.diagramSelection;
         ds.pasteClipboard();
         if (useDiagramStore.getState().diagramSelection !== before) e.preventDefault();
+      } else if (meta && e.key.toLowerCase() === "s" && !e.shiftKey) {
+        // ⌘S save now (the browser would download the page). Autosave runs
+        // anyway; this is the reassuring explicit save the File menu hints at.
+        e.preventDefault();
+        const ed = s();
+        if (ed.docId && ed.myRole !== "viewer") void ed.save();
+        else ed.setStatus("View only — this board can't be saved from here.");
       } else if (meta && e.key.toLowerCase() === "d") {
         // ⌘D duplicate in place (browser would bookmark the page).
         e.preventDefault();
@@ -518,12 +842,12 @@ export function Canvas() {
         !e.altKey &&
         e.key.length === 1 &&
         e.key !== " " &&
-        // Simple mode: DIGITS are the visible tool shortcuts (hints under the
-        // island buttons) and must keep working right after an add left the
-        // new shape selected — so they never start type-to-edit there.
-        // Letters still do; a label rarely starts with a digit and dblclick
-        // covers that case.
-        !(useAppStore.getState().uiMode === "simple" && /^[0-9]$/.test(e.key)) &&
+        // DIGITS are the visible tool shortcuts (hints under the island
+        // buttons) and must keep working right after an add left the new
+        // shape selected — so they never start type-to-edit. Letters still
+        // do; a label rarely starts with a digit and dblclick covers that.
+        // Q (tool lock) and L (Library) are tool keys too.
+        !/^[0-9qQlLkK?]$/.test(e.key) &&
         useDiagramStore.getState().diagramSelection.length === 1 &&
         useDiagramStore.getState().nodes[useDiagramStore.getState().diagramSelection[0]]
       ) {
@@ -537,6 +861,11 @@ export function Canvas() {
         s().setTool("select");
       } else if (e.key === "h") {
         s().setTool("pan");
+      } else if (e.key === "k") {
+        s().setTool("laser");
+      } else if (e.key === "a") {
+        // Arrow tool — the ONLY mode where shape borders/ports draw connectors.
+        s().setTool("arrow");
       } else if (e.key === "Escape") {
         // Esc leaves focus mode first (it hid the exit chrome); only then does
         // it clear the selection.
@@ -546,7 +875,7 @@ export function Canvas() {
         }
         s().setSelection([]);
         useDiagramStore.getState().setDiagramSelection([]);
-        if (s().tool === "arrow" || s().tool === "draw") s().setTool("select"); // disarm
+        if (s().tool !== "select" && s().tool !== "pan") s().setTool("select"); // disarm
       } else if (e.shiftKey && e.key === "!") {
         s().fitToView();
       }
@@ -580,7 +909,7 @@ export function Canvas() {
 
   return (
     <section
-      className={`canvas-host${gridOn ? "" : " no-grid"}${pageBackdrop ? "" : " no-backdrop"}${tool === "arrow" || tool === "draw" ? " arrow-tool" : ""}`}
+      className={`canvas-host${gridOn ? "" : " no-grid"}${pageBackdrop ? "" : " no-backdrop"}${tool === "arrow" || tool === "draw" ? " arrow-tool" : ""}${tool === "text" ? " text-tool" : ""}${tool === "pen" ? ` pen-tool brush-${penType}` : ""}${tool === "eraser" ? " eraser-tool" : ""}${tool === "laser" ? " laser-tool" : ""}`}
       ref={hostRef}
     >
       <svg id="stage" ref={stageRef} xmlns="http://www.w3.org/2000/svg">

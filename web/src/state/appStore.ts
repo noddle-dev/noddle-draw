@@ -180,10 +180,6 @@ interface AppState {
   // ---- page settings ----
   gridOn: boolean;
   snapOn: boolean;
-  /** draw.io-style growth chevrons on a selected shape (DirectionalArrows) —
-   * users who find them noisy can turn them off; persisted per browser. */
-  quickAddOn: boolean;
-  toggleQuickAdd: () => void;
   /** The white PAGE behind the shapes. Off = infinite Excalidraw-style
    * canvas (no artboard rectangle, the whole desk paints white). Persisted
    * per browser. */
@@ -334,7 +330,6 @@ export const useAppStore = create<AppState>((set) => ({
 
   gridOn: true,
   snapOn: true,
-  quickAddOn: localStorage.getItem("noddle-quick-add") !== "0",
   pageBackdrop: localStorage.getItem("noddle-page-backdrop") !== "0",
   togglePageBackdrop: () =>
     set((s) => {
@@ -344,15 +339,6 @@ export const useAppStore = create<AppState>((set) => ({
         /* private mode */
       }
       return { pageBackdrop: !s.pageBackdrop };
-    }),
-  toggleQuickAdd: () =>
-    set((s) => {
-      try {
-        localStorage.setItem("noddle-quick-add", s.quickAddOn ? "0" : "1");
-      } catch {
-        /* private mode */
-      }
-      return { quickAddOn: !s.quickAddOn };
     }),
 
   chats: loadChats(),

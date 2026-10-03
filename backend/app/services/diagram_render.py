@@ -58,7 +58,18 @@ def _shape(n: dict) -> str:
     kind = n.get("kind")
     common = f'fill="{fill}" stroke="{stroke}" stroke-width="{sw}"'
 
-    if kind == "image":
+    if kind == "freedraw":
+        pts = n.get("points") if isinstance(n.get("points"), list) else []
+        xy = [
+            f"{x + _num(pts[i]) * w:.1f},{y + _num(pts[i + 1]) * h:.1f}"
+            for i in range(0, len(pts) - 1, 2)
+        ]
+        body = (
+            f'<polyline points="{" ".join(xy)}" fill="none" stroke="{stroke}" '
+            f'stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round"/>'
+            if len(xy) >= 2 else ""
+        )
+    elif kind == "image":
         href = n.get("imageHref")
         # Only data:image/ hrefs are legitimate (matches svg_sanitizer's
         # _clean_href) — anything else falls through to the rect placeholder.

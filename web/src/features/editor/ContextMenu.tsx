@@ -12,6 +12,7 @@ import { useState } from "react";
 import { useAppStore } from "../../state/appStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { askClaudeEditSelection, askClaudeGroupBy } from "./claudeEdit";
+import { useExport } from "../toolbar/useExport";
 
 export interface CtxMenuState {
   x: number;
@@ -27,6 +28,7 @@ export function ContextMenu({
   onClose: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
+  const { exportSelectionPng, exportSelectionSvg } = useExport();
   const nodes = useDiagramStore((s) => s.nodes);
   const edges = useDiagramStore((s) => s.edges);
   const nodeIds = menu.ids.filter((id) => nodes[id]);
@@ -134,6 +136,14 @@ export function ContextMenu({
               </div>
             </>
           )}
+          {/* Export just the selection — rare enough to live here, not as
+              always-visible canvas chips on the selection frame. */}
+          <div className="menu-row" onClick={() => { exportSelectionPng(); onClose(); }}>
+            <span className="ico">▧</span><span style={{ flex: 1 }}>Export selection PNG</span>
+          </div>
+          <div className="menu-row" onClick={() => { exportSelectionSvg(); onClose(); }}>
+            <span className="ico">⬡</span><span style={{ flex: 1 }}>Export selection SVG</span>
+          </div>
           <div className="menu-row" style={{ color: "var(--danger)" }} onClick={remove}>
             <span className="ico">✕</span><span style={{ flex: 1 }}>Delete</span>
           </div>

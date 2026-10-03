@@ -11,9 +11,12 @@
  */
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { screenToContent } from "../../editor-core";
+import { beginEdgeLabelEdit } from "./edgeLabelEdit";
 import {
   edgePath,
+  pointAtT,
   simplifyOrtho,
+  tOfPoint,
   type DiagramEdge,
   type NodeMap,
   type Vec,
@@ -120,6 +123,15 @@ export function SegmentHandles({
           fill="transparent"
           style={{ cursor: horizontal ? "ns-resize" : "ew-resize" }}
           onPointerDown={startDrag(i, horizontal)}
+          // The pill sits exactly where people double-click to label an arrow
+          // (the segment middle) and appears on the FIRST click of that
+          // double-click — so it must add the label itself, like the line does.
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            const t = tOfPoint(pts, { x: mx, y: my });
+            const lid = useDiagramStore.getState().addEdgeLabel(edge.id, t);
+            beginEdgeLabelEdit(edge.id, pointAtT(pts, t), lid);
+          }}
         />
         <rect
           x={mx - w / 2}

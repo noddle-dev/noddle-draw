@@ -342,11 +342,46 @@ export function edgePath(edge: DiagramEdge, nodes: NodeMap): EdgeGeometry | null
       );
     }
     points = simplifyOrtho(points);
-  } else {
-    const s = resolveEndpoint(edge.source, nodes, targetAnchor);
-    const t = resolveEndpoint(edge.target, nodes, sourceAnchor);
+  } else if (edge.routing === "curved") {
+    // Excalidraw "curved": ONE gentle arc between the two ends — no side
+    // normals, which made both-ends-on-top connections loop over. With a
+    // user bend point (waypoints[0], dragged from the midpoint handle) the
+    // quadratic is solved to pass THROUGH it. Sampled so labels/hit math
+    // (polyline-based) stay unchanged; `d` is the true curve.
+    const wp = edge.waypoints?.[0];
+    const s = resolveEndpoint(edge.source, nodes, wp ?? targetAnchor);
+    const t = resolveEndpoint(edge.target, nodes, wp ?? sourceAnchor);
     if (!s || !t) return null;
-    points = [s, t];
+    let c: Vec;
+    if (wp) {
+      c = { x: 2 * wp.x - (s.x + t.x) / 2, y: 2 * wp.y - (s.y + t.y) / 2 };
+    } else {
+      const dx = t.x - s.x;
+      const dy = t.y - s.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const bend = Math.min(80, len * 0.18);
+      c = { x: (s.x + t.x) / 2 - (dy / len) * bend, y: (s.y + t.y) / 2 + (dx / len) * bend };
+    }
+    const N = 24;
+    const samples: Vec[] = [];
+    for (let i = 0; i <= N; i++) samples.push(quadAt(s, c, t, i / N));
+    return {
+      d: `M ${s.x} ${s.y} Q ${c.x} ${c.y} ${t.x} ${t.y}`,
+      points: samples,
+      mid: samples[N / 2],
+      sx: s.x,
+      sy: s.y,
+      tx: t.x,
+      ty: t.y,
+    };
+  } else {
+    // Straight ("sharp"): a user bend point turns it into a 2-segment polyline
+    // (Excalidraw's midpoint drag); floating ends aim at the nearest bend.
+    const wps = edge.waypoints ?? [];
+    const s = resolveEndpoint(edge.source, nodes, wps[0] ?? targetAnchor);
+    const t = resolveEndpoint(edge.target, nodes, wps[wps.length - 1] ?? sourceAnchor);
+    if (!s || !t) return null;
+    points = [s, ...wps, t];
   }
 
   if (points.length < 2) return null;
@@ -362,6 +397,12 @@ export function edgePath(edge: DiagramEdge, nodes: NodeMap): EdgeGeometry | null
     tx: last.x,
     ty: last.y,
   };
+}
+
+/** Point on the quadratic bezier (a, c, b) at parameter t. */
+function quadAt(a: Vec, c: Vec, b: Vec, t: number): Vec {
+  const u = 1 - t;
+  return { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y };
 }
 
 /** A coarse point for an attachment, used to aim the OTHER floating side. */

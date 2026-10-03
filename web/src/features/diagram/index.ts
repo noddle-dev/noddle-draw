@@ -8,3 +8,4 @@ export {
   type PaletteEntry,
   type PaletteSection,
 } from "./ShapePalette";
+export { CATEGORY_META, ICON_CATEGORIES, ICONS, type IconCategory, type IconDef, type IconGroup } from "./icons";

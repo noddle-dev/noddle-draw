@@ -793,6 +793,20 @@ components:
           type: string
           description: Nodes sharing a groupId select/drag as one unit (flat,
             no nesting)
+        points:
+          type: array
+          items: { type: number }
+          description: kind "freedraw" only — flat [x0,y0,x1,y1,…] pen stroke
+            normalised to the node box (0..1)
+        pen:
+          type: object
+          description: kind "freedraw" only — render-time brush settings
+          properties:
+            type: { type: string, enum: [pen, marker, highlighter] }
+            thinning: { type: number, minimum: 0, maximum: 1 }
+            smoothing: { type: number, minimum: 0, maximum: 1 }
+            taper: { type: boolean }
+            softness: { type: number, minimum: 0, maximum: 1 }
         z:
           type: number
           description: Unified paint order across nodes AND edges (higher →
@@ -809,7 +823,7 @@ components:
              arrowRight, arrowLeft, arrowDouble, chevron, umlClass, package,
              component, paperTape, summingJunction, orJunction, braceRight,
              braceLeft, bracketLeft, bracketRight, table, tableHeader,
-             icon, image]
+             icon, image, freedraw]
     Attachment:
       description: How an edge endpoint attaches — port (fixed relative point),
         floating (border point computed toward the far end), or free
@@ -864,7 +878,7 @@ components:
         target: { $ref: "#/components/schemas/Attachment" }
         routing:
           type: string
-          enum: [straight, elbow]
+          enum: [straight, elbow, curved]
         stroke: { type: string }
         strokeWidth: { type: number }
         endArrow:

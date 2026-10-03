@@ -19,14 +19,11 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { panState } from "../../state/panState";
 import { beginNodeTextEdit } from "./nodeTextEdit";
 import { PORTS } from "./ports";
+import { BindGlow } from "./BindGlow";
 
 /** Status-bar hint shown while the connect affordance is hovered. */
-const HOVER_HINT =
-  "Click or drag from a port/border: finish on a shape to connect, on empty canvas to create a connected shape (Esc cancels).";
 
-const ACCENT = "#2563eb";
 const HIT_R = 14;
-const DOT_R = 6;
 /** How far outside the shape the connect overlay reaches (catches just-outside
  * presses). */
 const BAND = 20;
@@ -43,7 +40,7 @@ export interface PreviewEdge {
   snapPort?: { nodeId: string; rel: Vec } | null;
 }
 
-function mintEdgeId(): string {
+export function mintEdgeId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID().slice(0, 8);
   }
@@ -128,8 +125,8 @@ export function ConnectionPorts({
           snapPort: tp,
         });
       };
-      // Arrow TOOL stays armed after a draw (sticky — chain several arrows);
-      // Esc or the Select tool (1/V) disarms it.
+      // A committed arrow drops the tool back to Select (Excalidraw) unless
+      // the tool lock (Q) is on; Esc or the Select tool (1/V) disarms it.
       //
       // TWO gestures finish an arrow (Excalidraw parity):
       //   • drag: press on the source, release on the target;
@@ -201,17 +198,20 @@ export function ConnectionPorts({
             source: { kind: "port", nodeId: node.id, rel },
             target: { kind: "floating", nodeId: newId },
             routing: "elbow",
-            stroke: "#475569",
+            stroke: "#2d3142", // same ink as shapes (Excalidraw)
             strokeWidth: 2,
             endArrow: true,
             startArrow: false,
             animated: false,
+            // New arrows inherit the LAST style the user set on one.
+            ...useEditorStore.getState().edgeStyle,
           });
           const st = useDiagramStore.getState();
           st.setDiagramSelection([newId]);
           const created = st.nodes[newId];
           if (created) beginNodeTextEdit(created); // type the label right away
           useEditorStore.getState().setStatus("Shape added and connected.", "ok");
+          useEditorStore.getState().finishToolUse();
           return;
         }
         const tp = targetPort(hit);
@@ -222,14 +222,17 @@ export function ConnectionPorts({
             ? { kind: "port", nodeId: tp.nodeId, rel: tp.rel }
             : { kind: "floating", nodeId: hit.nodeId },
           routing: "elbow",
-          stroke: "#475569",
+          stroke: "#2d3142", // same ink as shapes (Excalidraw)
           strokeWidth: 2,
           endArrow: true,
           startArrow: false,
           animated: false,
+          // New arrows inherit the LAST style the user set on one.
+          ...useEditorStore.getState().edgeStyle,
         };
         useDiagramStore.getState().addEdge(edge);
         useDiagramStore.getState().setDiagramSelection([edge.id]);
+        useEditorStore.getState().finishToolUse();
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
@@ -270,34 +273,30 @@ export function ConnectionPorts({
     const near = Math.hypot(c.x - pt.x, c.y - pt.y) <= NEAR;
     return { pt, near };
   };
-  // Arrow TOOL: the WHOLE node is a connect source — any press starts an edge
-  // from the pressed point projected onto the perimeter (no border-band gate),
-  // exactly what the Simple island's "5" tool promises.
-  const arrowTool = () => useEditorStore.getState().tool === "arrow";
+  // Tool-armed modes never steal the node INTERIOR: deep inside is always the
+  // MOVE hand (press bubbles to the node drag). Arrows start from the border
+  // band / ports only — in arrow mode exactly like select mode, just with the
+  // crosshair advertising intent on the empty canvas.
   const overlayMove = (e: ReactPointerEvent) => {
+    if (useEditorStore.getState().tool === "draw") {
+      setHoverPt(null); // draw mode: no connect dot, the hand means move
+      return;
+    }
     const info = borderInfo(e);
-    setHoverPt(info && (info.near || arrowTool()) ? info.pt : null);
-    // Tell the user what the affordance does the moment it lights up.
-    if (info?.near || arrowTool()) useEditorStore.getState().setStatus(HOVER_HINT);
+    setHoverPt(info?.near ? info.pt : null);
   };
   const overlayDown = (e: ReactPointerEvent) => {
-    if (useEditorStore.getState().tool === "draw") return; // draw-over wins
+    if (useEditorStore.getState().tool === "draw") return; // bubbles → move
     const info = borderInfo(e);
-    if (info && (info.near || arrowTool())) {
+    if (info?.near) {
       beginConnect(relOfPoint(info.pt), e); // else: bubbles → move
     }
   };
 
-  // A visible accent outline hugging the shape — the Lucid cue that the WHOLE
-  // border is connectable (non-interactive).
-  const isEllipse = node.kind === "ellipse";
-  const cue = isEllipse ? (
-    <ellipse cx={node.x + node.w / 2} cy={node.y + node.h / 2} rx={node.w / 2} ry={node.h / 2}
-      fill="none" stroke={ACCENT} strokeWidth={2} opacity={0.5} style={{ pointerEvents: "none" }} />
-  ) : (
-    <rect x={node.x} y={node.y} width={node.w} height={node.h} rx={node.kind === "rounded" ? 8 : 0}
-      fill="none" stroke={ACCENT} strokeWidth={2} opacity={0.5} style={{ pointerEvents: "none" }} />
-  );
+  // Excalidraw-clean: the ONLY visible cue is the soft glow hugging the
+  // shape (the whole border is connectable); ports/anchor dots stay as
+  // invisible hit targets.
+  const cue = <BindGlow node={node} />;
 
   const rotateTransform = node.rotation
     ? `rotate(${node.rotation} ${center.x} ${center.y})`
@@ -321,18 +320,6 @@ export function ConnectionPorts({
         onPointerLeave={() => setHoverPt(null)}
         onPointerDown={overlayDown}
       />
-      {/* live anchor dot at the projected border point */}
-      {hoverPt && (
-        <circle
-          cx={hoverPt.x}
-          cy={hoverPt.y}
-          r={DOT_R}
-          fill={ACCENT}
-          stroke="#fff"
-          strokeWidth={1.5}
-          style={{ pointerEvents: "none" }}
-        />
-      )}
       {PORTS.filter((p) => p.id !== "c").map((port) => {
         // Selected → shift the dot outward along the port's normal so it
         // clears the side resize grip sitting on the border at the same spot.
@@ -353,15 +340,6 @@ export function ConnectionPorts({
             >
               <title>Click or drag to draw an arrow — click again (or release) on the target; empty canvas adds a connected shape</title>
             </circle>
-            <circle
-              cx={px}
-              cy={py}
-              r={DOT_R}
-              fill="#fff"
-              stroke={ACCENT}
-              strokeWidth={1.5}
-              style={{ pointerEvents: "none" }}
-            />
           </g>
         );
       })}

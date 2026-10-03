@@ -458,6 +458,8 @@ NODE_FIELD_SAMPLES = {
     "imageHref": "data:image/png;base64,AAAA",
     "groupId": "g1",
     "z": 7,
+    "points": [0.0, 0.0, 0.5, 1.0, 1.0, 0.5],
+    "pen": {"type": "pen", "thinning": 0.5, "smoothing": 0.4, "taper": True, "softness": 0.0},
 }
 EDGE_FIELD_SAMPLES = {
     "endHead": "circle",

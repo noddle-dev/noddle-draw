@@ -30,7 +30,7 @@ import {
   type Tool,
 } from "../editor-core";
 import { FLOW_INTENSITY, type FlowIntensity } from "../editor-core/diagram";
-import type { DiagramNode, NodeKind } from "../editor-core/diagram";
+import type { DiagramEdge, DiagramNode, NodeKind, PenBrush, Vec } from "../editor-core/diagram";
 import { api, ApiError, type DocMeta } from "../shared/api/client";
 import { scrubSvgString } from "../shared/svgScrub";
 import {
@@ -45,6 +45,17 @@ import { getIdentity } from "./collabStore";
 import { useDiagramStore } from "./diagramStore";
 import { onPageSwitch, usePagesStore } from "./pagesStore";
 import { resetHistory, useDiagramHistory } from "./diagramHistory";
+
+/** The default pen: Excalidraw-like ink — pressure thinning + tapered ends. */
+export const DEFAULT_BRUSH: PenBrush = { type: "pen", thinning: 0.5, smoothing: 0.4, taper: true, softness: 0 };
+
+/**
+ * What a DRAWN shape wears before the user touches the style panel. Merged
+ * UNDER the palette entry's init (stickies/notes keep their own fill);
+ * `drawStyle` (the user's picks) wins over both. The OSS edition keeps its
+ * soft 3px corner as the only default.
+ */
+export const DRAW_STYLE_DEFAULTS: Partial<DiagramNode> = { cornerRadius: 3 };
 
 export type StatusKind = "" | "ok" | "error";
 
@@ -131,6 +142,27 @@ interface EditorState {
    * entry's own init. */
   drawStyle: Partial<DiagramNode>;
   setDrawStyle: (patch: Partial<DiagramNode>) => void;
+  /** Excalidraw tool lock (Q): off ⇒ a finished draw or arrow drops back
+   * to Select; on ⇒ the tool stays armed. Per session. */
+  toolLocked: boolean;
+  setToolLocked: (locked: boolean) => void;
+  /** Called after a draw/arrow gesture COMMITS — honors the tool lock. */
+  finishToolUse: () => void;
+  /** Transient magnet feedback while a free canvas arrow is dragged: the
+   * shape its head will bind to (+ the exact port when snapped to a dot). */
+  bindHint: { nodeId: string; rel?: Vec } | null;
+  setBindHint: (hint: { nodeId: string; rel?: Vec } | null) => void;
+  /** Pen tool style (its own — a pen width must not change shape borders).
+   * Persisted per browser. */
+  penStyle: { stroke: string; strokeWidth: number; opacity?: number; brush: PenBrush };
+  setPenStyle: (patch: Partial<{ stroke: string; strokeWidth: number; opacity?: number; brush: PenBrush }>) => void;
+  /** Eraser sweep: objects marked for deletion (faded until pointer up). */
+  eraseMarked: string[];
+  setEraseMarked: (ids: string[]) => void;
+  /** Style every NEW connector is born with — remembered from the last time
+   * the user styled one (quick panel), persisted per browser. */
+  edgeStyle: Partial<DiagramEdge>;
+  setEdgeStyle: (patch: Partial<DiagramEdge>) => void;
 
   applyCamera: () => void;
   setCam: (cam: Camera) => void;
@@ -212,6 +244,70 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   drawSpec: null,
   armDrawTool(spec) {
     set({ tool: "draw", drawSpec: spec });
+  },
+
+  toolLocked: false,
+  setToolLocked(locked) {
+    set({ toolLocked: locked });
+  },
+  finishToolUse() {
+    const { tool, toolLocked } = get();
+    // pen + eraser stay armed (Excalidraw) — you scribble / sweep repeatedly
+    if (!toolLocked && (tool === "draw" || tool === "arrow" || tool === "text")) set({ tool: "select" });
+  },
+  bindHint: null,
+  setBindHint(hint) {
+    const cur = get().bindHint;
+    // pointermove fires constantly — only re-render when the target changes
+    if (cur?.nodeId === hint?.nodeId && cur?.rel?.x === hint?.rel?.x && cur?.rel?.y === hint?.rel?.y) return;
+    set({ bindHint: hint });
+  },
+  penStyle: (() => {
+    try {
+      return { stroke: "#2d3142", strokeWidth: 2, brush: { ...DEFAULT_BRUSH }, ...JSON.parse(localStorage.getItem("noddle-pen-style") ?? "{}") };
+    } catch {
+      return { stroke: "#2d3142", strokeWidth: 2, brush: { ...DEFAULT_BRUSH } };
+    }
+  })(),
+  setPenStyle(patch) {
+    const next = { ...get().penStyle, ...patch };
+    if (next.opacity === undefined || next.opacity >= 1) delete next.opacity;
+    try {
+      localStorage.setItem("noddle-pen-style", JSON.stringify(next));
+    } catch {
+      /* private mode */
+    }
+    set({ penStyle: next });
+  },
+  eraseMarked: [],
+  setEraseMarked(ids) {
+    set({ eraseMarked: ids });
+  },
+  edgeStyle: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("noddle-edge-style") ?? "{}");
+    } catch {
+      return {};
+    }
+  })(),
+  setEdgeStyle(patch) {
+    // Only STYLE fields are remembered — endpoints/labels/z are per-edge intent.
+    const KEEP = new Set([
+      "stroke", "strokeWidth", "dash", "routing",
+      "endHead", "endArrow", "startHead", "startArrow",
+    ]);
+    const next: Partial<DiagramEdge> = { ...get().edgeStyle };
+    for (const [k, v] of Object.entries(patch)) {
+      if (!KEEP.has(k)) continue;
+      if (v === undefined) delete (next as Record<string, unknown>)[k];
+      else (next as Record<string, unknown>)[k] = v;
+    }
+    try {
+      localStorage.setItem("noddle-edge-style", JSON.stringify(next));
+    } catch {
+      /* private mode */
+    }
+    set({ edgeStyle: next });
   },
 
   drawStyle: (() => {

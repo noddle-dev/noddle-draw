@@ -8,3 +8,5 @@ export * from "./perimeter";
 export * from "./geometry";
 export * from "./orthogonal";
 export * from "./mermaid";
+export * from "./fragment";
+export * from "./freedraw";

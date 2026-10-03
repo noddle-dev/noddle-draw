@@ -647,8 +647,6 @@ function PageSettings() {
   const snapOn = useAppStore((s) => s.snapOn);
   const toggleGrid = useAppStore((s) => s.toggleGrid);
   const toggleSnap = useAppStore((s) => s.toggleSnap);
-  const quickAddOn = useAppStore((s) => s.quickAddOn);
-  const toggleQuickAdd = useAppStore((s) => s.toggleQuickAdd);
   const pageBackdrop = useAppStore((s) => s.pageBackdrop);
   const togglePageBackdrop = useAppStore((s) => s.togglePageBackdrop);
   const nodes = useDiagramStore((s) => s.nodes);
@@ -675,12 +673,6 @@ function PageSettings() {
       <div className="prop-row">
         <span className="lbl">Snap to grid</span>
         <button className={`switch${snapOn ? " on" : ""}`} onClick={toggleSnap}><span className="knob" /></button>
-      </div>
-      <div className="prop-row">
-        <span className="lbl" title="The blue chevrons around a selected shape that add a connected shape in one click">
-          Quick-add arrows
-        </span>
-        <button className={`switch${quickAddOn ? " on" : ""}`} onClick={toggleQuickAdd}><span className="knob" /></button>
       </div>
       <div className="prop-row">
         <span className="lbl" title="The white page behind your shapes. Off = an infinite Excalidraw-style canvas (no page rectangle)">
