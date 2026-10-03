@@ -104,6 +104,16 @@ There is no Python linter/formatter config checked in; match surrounding style.
   with `history.replaceState`). `editorStore.openDoc` heals a stale
   lastBoardId by minting a new board; a foreign dead link shows the
   `notFound` screen.
+- Editor chrome = the Excalidraw-style floating islands in
+  `features/editor/SimpleMode.tsx` (`.editor.simple` CSS) — the ONLY editor
+  UI; the old docked "Full" layout, its topbar/status bar and the Full|Simple
+  switch are gone (a stale `noddle-ui-mode` localStorage key is ignored).
+  ☰ File menu = `SimpleFileMenu.tsx`, left style panel = `DrawStylePanel.tsx`,
+  floating Properties/AI panel = `appStore.simplePanelOpen`, Library browser
+  = `features/library/` (`L`), `?` = `ShortcutsDialog.tsx` (hand-kept key
+  list), ⌥Z zen (`appStore.zenMode`), status feedback = `EditorScreen`'s
+  `SimpleToast` (there is no status bar). Embeds mount no chrome. Kept in
+  step with the commercial edition's editor — see "Two editions" there.
 - Features under `features/*` never import another feature's internals —
   cross-feature communication goes through the Zustand stores in `state/`.
   `shared/` holds the API client (incl. BYOK/localStorage helpers), UI
