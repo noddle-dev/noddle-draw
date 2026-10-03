@@ -1,0 +1,59 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.noddle-dev/noddle-draw",
+  "title": "noddle draw",
+  "description": "Read, create and edit open-source noddle draw diagram boards, browse versions and comment.",
+  "version": "1.0.0",
+  "websiteUrl": "https://draw.noddle.dev",
+  "repository": {
+    "url": "https://github.com/noddle-dev/noddle-draw",
+    "source": "github",
+    "id": "1294749108",
+    "subfolder": "mcp"
+  },
+  "icons": [
+    { "src": "https://draw.noddle.dev/logo-512.png", "mimeType": "image/png", "sizes": ["512x512"] },
+    { "src": "https://draw.noddle.dev/favicon.svg", "mimeType": "image/svg+xml", "sizes": ["any"] }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "noddle-draw-mcp",
+      "version": "1.0.0",
+      "runtimeHint": "uvx",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "NODDLE_BASE_URL",
+          "description": "http(s) origin of the noddle draw instance. Set it to your own origin when self-hosting.",
+          "default": "https://draw.noddle.dev",
+          "isRequired": false
+        },
+        {
+          "name": "NODDLE_AGENT_NAME",
+          "description": "Display name on the agent's comments and version snapshots (max 40 chars).",
+          "default": "MCP agent",
+          "isRequired": false
+        },
+        {
+          "name": "NODDLE_AI_PROVIDER",
+          "description": "Optional bring-your-own-key provider for generate_diagram.",
+          "choices": ["claude", "openai", "gemini", "openrouter", "custom"],
+          "isRequired": false
+        },
+        {
+          "name": "NODDLE_AI_KEY",
+          "description": "Optional AI provider key, sent only to NODDLE_BASE_URL per call and never stored.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "NODDLE_AI_MODEL",
+          "description": "Optional model override for generate_diagram.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
