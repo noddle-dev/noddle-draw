@@ -1,5 +1,6 @@
 /**
- * features/editor/RightPanel — Properties / Claude tabs on the right side.
+ * features/editor/RightPanel — Properties / Claude tabs, floated on the right
+ * over the canvas (appStore.simplePanelOpen, toggled by the ◧ island).
  */
 import { useAppStore } from "../../state/appStore";
 import { PropertiesInspector } from "./PropertiesInspector";
@@ -15,6 +16,15 @@ export function RightPanel() {
         <button className={`ed-tab${rightTab === "props" ? " active" : ""}`} onClick={() => setRightTab("props")}>Properties</button>
         <button className={`ed-tab${rightTab === "claude" ? " active" : ""}`} onClick={() => setRightTab("claude")}>
           ✦ AI-Noddle <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--ok)", display: "inline-block" }} />
+        </button>
+        {/* its own × — the ◧ toggle top-right is easy to miss */}
+        <button
+          className="ed-panel-close"
+          title="Close panel (Esc)"
+          aria-label="Close panel"
+          onClick={() => useAppStore.getState().setSimplePanelOpen(false)}
+        >
+          ×
         </button>
       </div>
       {rightTab === "props"

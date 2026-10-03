@@ -256,3 +256,19 @@ onCollabPageState((pageId, diagram) => {
     };
   });
 });
+
+/**
+ * The board's editable diagram in its persisted shape: `{pages:[…]}` once the
+ * pages store is in use, else the legacy single-diagram `{nodes,edges}` (a
+ * board that never touched pages — collect() alone would be `{pages:[]}`,
+ * which the server rejects and which exported as an EMPTY file). Shared by
+ * save, "Make a copy" and the board-JSON export so they can't drift.
+ */
+export function boardDiagram():
+  | ReturnType<PagesState["collect"]>
+  | { nodes: DiagramNode[]; edges: DiagramEdge[] } {
+  const pages = usePagesStore.getState();
+  if (pages.pages.length) return pages.collect();
+  const ds = useDiagramStore.getState();
+  return { nodes: Object.values(ds.nodes), edges: Object.values(ds.edges) };
+}

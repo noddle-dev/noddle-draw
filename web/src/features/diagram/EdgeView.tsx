@@ -18,7 +18,7 @@ import {
   DASH_CYCLE_MS,
   BEAM_CYCLE_MS,
   PULSE_CYCLE_MS,
-  DOTS_CYCLE_MS,
+  DOTS_STEP_MS,
   dotsForLength,
   pointAtT,
   segmentDirAtT,
@@ -127,7 +127,8 @@ function FlowDots({
 }) {
   const params = FLOW_INTENSITY[intensity];
   const r = Math.max(params.dotMinR, strokeWidth * params.dotScale);
-  const durS = DOTS_CYCLE_MS / speed / 1000;
+  // constant velocity: one spacing per DOTS_STEP_MS (see animation.ts)
+  const durS = (count * DOTS_STEP_MS) / speed / 1000;
   return (
     <>
       {Array.from({ length: count }, (_, i) => (

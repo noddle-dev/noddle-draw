@@ -50,12 +50,22 @@ import { resetHistory, useDiagramHistory } from "./diagramHistory";
 export const DEFAULT_BRUSH: PenBrush = { type: "pen", thinning: 0.5, smoothing: 0.4, taper: true, softness: 0 };
 
 /**
- * What a DRAWN shape wears before the user touches the style panel. Merged
- * UNDER the palette entry's init (stickies/notes keep their own fill);
- * `drawStyle` (the user's picks) wins over both. The OSS edition keeps its
- * soft 3px corner as the only default.
+ * What a DRAWN shape wears before the user touches the style panel — the
+ * panel shows these same values, so what you see is what you draw
+ * (Excalidraw). Merged UNDER the palette entry's init, so stickies/notes keep
+ * their own fill; `drawStyle` (the user's picks) wins over both.
  */
-export const DRAW_STYLE_DEFAULTS: Partial<DiagramNode> = { cornerRadius: 3 };
+export const DRAW_STYLE_DEFAULTS: Partial<DiagramNode> = {
+  // House style (shared with the commercial edition): hand-drawn, rounded,
+  // big bold label.
+  stroke: "#2d3142",
+  fill: "transparent",
+  strokeWidth: 2,
+  sketch: true,
+  cornerRadius: 12,
+  fontSize: 28,
+  bold: true,
+};
 
 export type StatusKind = "" | "ok" | "error";
 
@@ -180,7 +190,12 @@ interface EditorState {
 
   currentSvg: () => string;
   /** Serialise the FULL board (uploaded content + diagram layer) to SVG. */
-  currentBoardSvg: () => string;
+  /** Serialize the board to SVG. ``scope`` frames the viewBox:
+   *  "page" (default) = the full artboard; "fit" = cropped to the content
+   *  bounding box + margin (draw.io "fit to content"); "selection" = cropped
+   *  to the current diagram selection (falls back to "fit" when nothing is
+   *  selected). */
+  currentBoardSvg: (opts?: { scope?: "page" | "fit" | "selection" }) => string;
   /** Grow the white page so it always contains every diagram node (+margin).
    * Never shrinks — the artboard only expands as content spreads out. */
   ensureArtboardFits: () => void;
@@ -200,6 +215,42 @@ interface EditorState {
 }
 
 const initialCam: Camera = { x: 0, y: 0, z: 1 };
+
+/** Content bounding box (content coords) for an export scope, or null when it
+ * can't be measured. "selection" unions the bbox of the selected node/edge
+ * DOM groups; "fit" uses the whole diagram layer. Falls back gracefully. */
+function bboxForScope(
+  layerEl: Element | null | undefined,
+  scope: "fit" | "selection",
+  selection: string[],
+): { x: number; y: number; w: number; h: number } | null {
+  if (!layerEl) return null;
+  const union = (els: Element[]): DOMRect | null => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const el of els) {
+      const b = (el as SVGGraphicsElement).getBBox?.();
+      if (!b || (b.width === 0 && b.height === 0)) continue;
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height);
+    }
+    if (!isFinite(x0)) return null;
+    return new DOMRect(x0, y0, x1 - x0, y1 - y0);
+  };
+  let box: DOMRect | null = null;
+  if (scope === "selection" && selection.length) {
+    const sel = selection
+      .map(
+        (id) =>
+          layerEl.querySelector(`[data-diagram-node="${CSS.escape(id)}"]`) ??
+          layerEl.querySelector(`[data-diagram-edge="${CSS.escape(id)}"]`),
+      )
+      .filter((e): e is Element => !!e);
+    box = union(sel);
+  }
+  if (!box) box = (layerEl as SVGGraphicsElement).getBBox?.() ?? null;
+  if (!box || (box.width === 0 && box.height === 0)) return null;
+  return { x: box.x, y: box.y, w: box.width, h: box.height };
+}
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   refs: null,
@@ -501,7 +552,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
-  currentBoardSvg() {
+  currentBoardSvg(opts) {
     const { refs, artboard } = get();
     if (!refs) return "";
     const { w, h } = artboard;
@@ -543,7 +594,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // backend parses the save strictly ("Not a valid SVG: undefined entity").
       diagramHtml = new XMLSerializer().serializeToString(clone);
     }
-    const ox = artboard.ox ?? 0, oy = artboard.oy ?? 0;
+    // viewBox framing. "page" = the full white artboard (default, and always
+    // used for save so the stored board keeps its canvas). "fit"/"selection"
+    // crop to a content/selection bounding box measured from the LIVE diagram
+    // layer via getBBox (content coords), so exports match draw.io's
+    // "fit to content" / "selection only".
+    let vx = artboard.ox ?? 0, vy = artboard.oy ?? 0, vw = w, vh = h;
+    const scope = opts?.scope ?? "page";
+    if (scope !== "page") {
+      const layerEl = (refs.content.parentNode as Element | null)?.querySelector(
+        "#diagram-layer",
+      );
+      const box = bboxForScope(layerEl, scope, useDiagramStore.getState().diagramSelection);
+      if (box) {
+        const m = 24; // breathing margin around the framed content
+        vx = box.x - m;
+        vy = box.y - m;
+        vw = box.w + m * 2;
+        vh = box.h + m * 2;
+      }
+    }
     // xmlns:xlink unconditionally — content may carry xlink:href (uploaded
     // SVGs); without it the save is rejected as not-well-formed XML.
     // Children serialized as XML for the same &nbsp; reason as diagramHtml.
@@ -551,7 +621,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const contentXml = Array.from(contentClone.childNodes)
       .map((n) => xml.serializeToString(n))
       .join("");
-    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${ox} ${oy} ${w} ${h}" width="${w}" height="${h}">${contentXml}${diagramHtml}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${vx} ${vy} ${vw} ${vh}" width="${Math.round(vw)}" height="${Math.round(vh)}">${contentXml}${diagramHtml}</svg>`;
   },
 
   async refreshDocs() {

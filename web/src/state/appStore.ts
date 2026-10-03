@@ -20,7 +20,6 @@ export type View = "generate" | "editor";
 export type GenMode = "text" | "sketch" | "mermaid";
 export type LeftTab = "shapes" | "layers";
 export type RightTab = "props" | "claude";
-export type UiMode = "full" | "simple";
 
 export interface ChatMessage {
   who: "ai" | "you";
@@ -162,20 +161,24 @@ interface AppState {
   /** Presentation mode (#16) — fullscreen, pages become slides (←/→, Esc). */
   presenting: boolean;
   setPresenting: (on: boolean) => void;
-  /** Left/right rail visibility — declutter without leaving the editor.
-   * Toggle with `[` / `]`; focus mode hides everything (`\`, Esc exits). */
-  leftPanelOpen: boolean;
-  rightPanelOpen: boolean;
-  focusMode: boolean;
-  toggleLeftPanel: () => void;
-  toggleRightPanel: () => void;
-  toggleFocusMode: (on?: boolean) => void;
-  /** Keyboard-shortcut cheat sheet (? opens, Esc/click closes). */
+  /** Zen mode (⌥Z): hide every island except a small exit pill. */
+  zenMode: boolean;
+  toggleZen: () => void;
+  /** Keyboard-shortcuts sheet (? key / ☰ → Keyboard shortcuts). */
   shortcutsOpen: boolean;
-  setShortcutsOpen: (open: boolean) => void;
-  /** Editor chrome mode — persisted per browser (localStorage). */
-  uiMode: UiMode;
-  setUiMode: (m: UiMode) => void;
+  setShortcutsOpen: (on: boolean) => void;
+  /** The floating Properties/AI panel — in the store (not local
+   * state) so the chat status strip's "Details" can open it. */
+  simplePanelOpen: boolean;
+  setSimplePanelOpen: (open: boolean) => void;
+  /** The floating Library browser — shares the right-hand slot
+   * with the Properties/AI panel, so opening one closes the other. */
+  libraryOpen: boolean;
+  setLibraryOpen: (open: boolean) => void;
+  /** Pending GIF-export modal request (scope) — set by the context menu / ☰,
+   * rendered by EditorScreen (a menu can't host a modal that outlives it). */
+  gifExportScope: "page" | "fit" | "selection" | null;
+  setGifExportScope: (s: "page" | "fit" | "selection" | null) => void;
 
   // ---- page settings ----
   gridOn: boolean;
@@ -259,15 +262,9 @@ function ensureBoard(chats: Record<string, BoardChats>, key: string): BoardChats
   return { sessions: [s], activeId: s.id };
 }
 
-// Editor chrome preference (Full vs Simple) — survives reloads, per browser.
-const UI_MODE_KEY = "noddle-ui-mode";
-function loadUiMode(): UiMode {
-  try {
-    return localStorage.getItem(UI_MODE_KEY) === "simple" ? "simple" : "full";
-  } catch {
-    return "full";
-  }
-}
+// The floating-island chrome is the ONLY editor UI (the docked "Full" layout
+// was retired). A stale `noddle-ui-mode` localStorage key from older builds is
+// simply ignored — nothing reads it any more.
 
 // Chat sessions survive a page reload (per tab). Best-effort — quota/privacy
 // errors just mean an empty history.
@@ -309,24 +306,18 @@ export const useAppStore = create<AppState>((set) => ({
   embedMode: false,
   presenting: false,
   setPresenting: (on) => set({ presenting: on }),
-  leftPanelOpen: true,
-  rightPanelOpen: true,
-  focusMode: false,
-  toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
-  toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
-  toggleFocusMode: (on) =>
-    set((s) => ({ focusMode: on ?? !s.focusMode })),
+  zenMode: false,
+  toggleZen: () => set((s) => ({ zenMode: !s.zenMode })),
   shortcutsOpen: false,
-  setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
-  uiMode: loadUiMode(),
-  setUiMode: (m) => {
-    try {
-      localStorage.setItem(UI_MODE_KEY, m);
-    } catch {
-      /* private mode — preference just won't survive the reload */
-    }
-    set({ uiMode: m });
-  },
+  setShortcutsOpen: (on) => set({ shortcutsOpen: on }),
+  simplePanelOpen: false,
+  setSimplePanelOpen: (simplePanelOpen) =>
+    set(simplePanelOpen ? { simplePanelOpen, libraryOpen: false } : { simplePanelOpen }),
+  libraryOpen: false,
+  setLibraryOpen: (libraryOpen) =>
+    set(libraryOpen ? { libraryOpen, simplePanelOpen: false } : { libraryOpen }),
+  gifExportScope: null,
+  setGifExportScope: (gifExportScope) => set({ gifExportScope }),
 
   gridOn: true,
   snapOn: true,

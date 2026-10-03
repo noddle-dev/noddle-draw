@@ -16,6 +16,7 @@ import type {
   NodeKind,
   Vec,
 } from "../editor-core/diagram";
+import { resolveEndpoint, stampFragment, type Fragment } from "../editor-core/diagram";
 import { shapeDef } from "../editor-core/diagram/shapeDefs";
 
 /** Photoshop-style arrangement of a multi-selection (see alignSelection). */
@@ -108,6 +109,11 @@ interface DiagramState {
   /** Add a node CENTERED exactly at `at` (drag-drop). `init` overrides defaults
    * — e.g. `{ iconKey, text }` for icon nodes. */
   addNodeAt: (kind: NodeKind, at: Vec, init?: Partial<DiagramNode>) => string;
+  /** Stamp a reusable fragment (library item / "My shapes" stencil) with its
+   * bbox CENTRE at content point `at`: fresh ids, remapped connectors/groups,
+   * on top of everything; the insert becomes the selection. Returns the new
+   * node + edge ids. */
+  insertFragment: (frag: Fragment, at: Vec) => { nodeIds: string[]; edgeIds: string[] };
   /** Clear the whole diagram and leave diagram mode (e.g. opening an SVG doc). */
   clearDiagram: () => void;
   moveNode: (id: string, dx: number, dy: number) => void;
@@ -261,6 +267,21 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       diagramSelection: [],
       diagramMode: true,
     });
+  },
+
+  insertFragment(frag, at) {
+    const s = get();
+    const { nodes, edges } = stampFragment(frag, at, {
+      mintId,
+      zStart: nextZ(s.nodes, s.edges),
+    });
+    const nodeIds = nodes.map((n) => n.id);
+    const edgeIds = edges.map((e) => e.id);
+    if (!nodeIds.length && !edgeIds.length) return { nodeIds, edgeIds };
+    s.setDiagramMode(true);
+    s.applyPatch({ upsertNodes: nodes, upsertEdges: edges });
+    set({ diagramSelection: [...nodeIds, ...edgeIds] });
+    return { nodeIds, edgeIds };
   },
 
   addNode(kind, at, init) {
@@ -492,19 +513,35 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     if (!diagramSelection.length) return;
     const selNodes = new Set(diagramSelection.filter((id) => nodes[id]));
     const selEdges = new Set(diagramSelection.filter((id) => edges[id]));
-
-    // Selecting a node also removes edges attached to it.
-    for (const nid of selNodes) {
-      for (const eid of edgesByNode[nid] ?? []) selEdges.add(eid);
-    }
+    void edgesByNode; // index rebuilt below; attached edges are KEPT, not deleted
 
     const nextNodes: Record<string, DiagramNode> = {};
     for (const [id, n] of Object.entries(nodes)) {
       if (!selNodes.has(id)) nextNodes[id] = n;
     }
+    // Excalidraw behavior: deleting a shape UNBINDS its arrows instead of
+    // deleting them — each lost endpoint freezes as a "free" point exactly
+    // where it was anchored, so the arrow survives (both-ends-deleted included).
+    // Only edges the user explicitly selected are removed.
     const nextEdges: Record<string, DiagramEdge> = {};
     for (const [id, e] of Object.entries(edges)) {
-      if (!selEdges.has(id)) nextEdges[id] = e;
+      if (selEdges.has(id)) continue;
+      const srcGone = e.source.kind !== "free" && selNodes.has(e.source.nodeId);
+      const tgtGone = e.target.kind !== "free" && selNodes.has(e.target.nodeId);
+      if (!srcGone && !tgtGone) {
+        nextEdges[id] = e;
+        continue;
+      }
+      // Resolve the CURRENT anchor positions while the nodes still exist.
+      const tRough = resolveEndpoint(e.target, nodes, null);
+      const sPt = resolveEndpoint(e.source, nodes, tRough);
+      const tPt = resolveEndpoint(e.target, nodes, sPt);
+      if ((srcGone && !sPt) || (tgtGone && !tPt)) continue; // unresolvable → drop
+      nextEdges[id] = {
+        ...e,
+        source: srcGone ? { kind: "free", point: sPt! } : e.source,
+        target: tgtGone ? { kind: "free", point: tPt! } : e.target,
+      };
     }
     const nextIndex: Record<string, string[]> = {};
     for (const [id, e] of Object.entries(nextEdges)) {

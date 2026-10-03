@@ -15,16 +15,33 @@ const DURATIONS = [
   { ms: 2400, label: "2.4s" },
   { ms: 3600, label: "3.6s" },
 ];
-const FPS_OPTS = [10, 15, 20, 25];
+// 30 is the practical GIF ceiling: delays are stored in 10ms steps, so 30fps
+// encodes as 3cs (~33fps) and anything above just bloats the file — many
+// decoders clamp 2cs-and-below hard. There is no 60fps GIF.
+const FPS_OPTS = [10, 15, 20, 25, 30];
 const SCALES = [
   { v: 0.5, label: "0.5×" },
   { v: 1, label: "1×" },
   { v: 2, label: "2×" },
 ];
 
-export function GifExportModal({ onClose }: { onClose: () => void }) {
+export function GifExportModal({
+  onClose,
+  scope = "page",
+}: {
+  onClose: () => void;
+  /** draw.io-style framing — the selection frame's GIF chip passes "selection". */
+  scope?: "page" | "fit" | "selection";
+}) {
   const artboard = useEditorStore((s) => s.artboard);
   const docId = useEditorStore((s) => s.docId);
+  // Cropped scopes: preview dimensions come from the framed viewBox.
+  const [box] = useState(() => {
+    if (scope === "page") return null;
+    const svg = useEditorStore.getState().currentBoardSvg({ scope });
+    const m = /viewBox="[^"]*?\s([\d.]+)\s([\d.]+)"/.exec(svg);
+    return m ? { w: parseFloat(m[1]), h: parseFloat(m[2]) } : null;
+  });
   const [durationMs, setDurationMs] = useState(GIF_DEFAULTS.durationMs);
   const [fps, setFps] = useState(GIF_DEFAULTS.fps);
   const [scale, setScale] = useState(GIF_DEFAULTS.scale);
@@ -32,18 +49,18 @@ export function GifExportModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
 
   const frames = Math.round((durationMs / 1000) * fps);
-  const outW = Math.round(artboard.w * scale);
-  const outH = Math.round(artboard.h * scale);
+  const outW = Math.round((box?.w ?? artboard.w) * scale);
+  const outH = Math.round((box?.h ?? artboard.h) * scale);
   const busy = progress !== null && progress < 1;
 
   const run = async () => {
     setError(null);
     setProgress(0);
     try {
-      const blob = await exportAnimatedGif({ durationMs, fps, scale }, setProgress);
+      const blob = await exportAnimatedGif({ durationMs, fps, scale, scope }, setProgress);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = (docId || "board") + ".gif";
+      a.download = (docId || "board") + (scope === "page" ? "" : `-${scope}`) + ".gif";
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       useEditorStore

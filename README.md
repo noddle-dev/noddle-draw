@@ -77,6 +77,11 @@ AI simply stays off until you add a key.
 
 - ⚡ **Zero friction** — open the site, you're drawing. `/` reopens the board
   you were working on; the board URL is the sharing capability.
+- ✏️ **Excalidraw-style editor** — one floating tool island (hand, select,
+  rectangle, text, ellipse, arrow, diamond, pen, eraser, laser pointer, tool
+  lock), a style panel on the left (colours, stroke, sloppiness, fonts, arrow
+  types & heads, brush pressure/smoothing, layers, align, flip), a Library of
+  ~100 ready-made pieces (`L`), and a ☰ File menu for everything else.
 - 🎨 **Real diagramming** — 47 shapes + cloud stencils, rotation, grouping
   (`⌘G`), align/distribute, z-order, text wrap/formatting, type-to-edit,
   rubber-band select across shapes *and* connectors, grid & snap.
@@ -87,15 +92,17 @@ AI simply stays off until you add a key.
   photo→editable shapes (background jobs), right-click "enrich with AI".
   Concurrent-edit safe: its changes merge onto your latest board instead of
   replacing it.
-- 📤 **Export & import** — SVG, PNG, animated GIF, per-page deck PNGs,
-  Mermaid, and a re-importable board JSON; imports draw.io files and pasted
-  images.
-- 🖥 **Ways to show it** — Present mode (pages become slides), focus mode
-  (`\`, just the canvas), collapsible panels (`[` / `]`), read-only
-  `/embed/{id}` iframes, and a `?` keyboard-shortcuts cheat sheet.
-- 🧩 **Agent-friendly** — a small [MCP server](mcp/) (get/create/update board,
-  list/add comments) lets AI agents edit boards through the REST API — the
-  board URL is the capability, no tokens needed.
+- 📤 **Export & import** — SVG, PNG (1×/2×/4×), animated GIF, per-page deck
+  PNGs, Mermaid and a re-importable board JSON, framed as the page, fit to
+  content or just the selection; imports board JSON, draw.io, Mermaid and SVG
+  files and pasted images.
+- 🖥 **Ways to show it** — Present mode (pages become slides), Zen mode
+  (`⌥Z`, just the canvas), copy as PNG (`⌘⇧C`), read-only `/embed/{id}`
+  iframes, and a `?` keyboard-shortcuts sheet.
+- 🧩 **Agent-friendly** — a stdlib [MCP server](mcp/) (boards as
+  `noddle://board/{id}` resources, tools for boards, versions, comments and
+  AI generation, design/review prompts) lets AI agents edit boards through
+  the REST API — the board URL is the capability, no tokens needed.
 
 ## Self-host in one command
 
