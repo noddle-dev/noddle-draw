@@ -31,15 +31,22 @@ import { RightPanel } from "./RightPanel";
 import { TemplatesModal } from "../templates/TemplatesModal";
 import { createBoard } from "../templates/templates";
 
-/** One island slot: a MODE (select cursor / draw-arrow) or a shape to add. */
-type IslandItem =
-  | { kind: "mode"; mode: "select" | "arrow"; label: string; letter?: string }
-  | { kind: "shape"; entry: PaletteEntry; letter?: string };
+/** One island slot: a MODE (select cursor / draw-arrow / pen …) or a shape to add. */
+type IslandMode = "select" | "arrow" | "pen" | "eraser" | "laser";
+type IslandItem = (
+  | { kind: "mode"; mode: IslandMode; label: string; letter?: string }
+  | { kind: "shape"; entry: PaletteEntry; letter?: string }
+) & {
+  /** Digit shortcut (1–9) — only the core tools; extras are letter-only so
+   * adding a tool never renumbers the ones people already know. */
+  digit?: number;
+};
 
 /**
  * The island, in Excalidraw's digit order: 1 select, 2 rectangle, 3 diamond,
  * 4 ellipse, 5 arrow — then noddle's extras (rounded/note/sticky). Everything
- * else stays reachable through ⋯ (the full Shapes/Layers panel).
+ * else stays reachable through ⋯ (the full Shapes/Layers panel). P pen,
+ * E eraser and K laser follow as letter-only extras.
  */
 const ISLAND: IslandItem[] = (() => {
   const section = (name: string) =>
@@ -58,14 +65,20 @@ const ISLAND: IslandItem[] = (() => {
     note && { kind: "shape", entry: note, letter: "n" },
     sticky && { kind: "shape", entry: sticky, letter: "s" },
   ];
-  return items.filter(Boolean) as IslandItem[];
+  const numbered = (items.filter(Boolean) as IslandItem[]).map((t, i) => ({ ...t, digit: i + 1 }));
+  return [
+    ...numbered,
+    { kind: "mode", mode: "pen", label: "Pen", letter: "p" },
+    { kind: "mode", mode: "eraser", label: "Eraser", letter: "e" },
+    { kind: "mode", mode: "laser", label: "Laser pointer", letter: "k" },
+  ] as IslandItem[];
 })();
 
 /** key (digit or letter) → ISLAND index. */
 const TOOL_KEYS: Record<string, number> = (() => {
   const m: Record<string, number> = {};
   ISLAND.forEach((t, i) => {
-    m[String(i + 1)] = i;
+    if (t.digit) m[String(t.digit)] = i;
     if (t.letter && m[t.letter] === undefined) m[t.letter] = i;
   });
   return m;
@@ -74,11 +87,49 @@ const TOOL_KEYS: Record<string, number> = (() => {
 /** The keyboard hint for a slot's tooltip ("2 · R"). */
 const keyHint = (i: number): string => {
   const t = ISLAND[i];
-  return t.letter ? `${i + 1} · ${t.letter.toUpperCase()}` : String(i + 1);
+  if (!t.digit) return (t.letter ?? "").toUpperCase();
+  return t.letter ? `${t.digit} · ${t.letter.toUpperCase()}` : String(t.digit);
+};
+/** What the corner of the button shows: the digit, else the letter. */
+const cornerKey = (i: number): string => {
+  const t = ISLAND[i];
+  return t.digit ? String(t.digit) : (t.letter ?? "").toUpperCase();
+};
+
+const MODE_TITLES: Record<IslandMode, string> = {
+  select: "the normal cursor",
+  arrow: "drag from any shape to draw a connector",
+  pen: "draw freehand",
+  eraser: "sweep over objects to erase them",
+  laser: "point at things — the trail fades, nothing is saved",
 };
 
 /** Doodle-style inline glyphs for the two mode slots (no emoji per repo rule). */
-function ModeGlyph({ mode }: { mode: "select" | "arrow" }) {
+function ModeGlyph({ mode }: { mode: IslandMode }) {
+  const P = { viewBox: "0 0 24 24", width: 18, height: 18, fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (mode === "pen") {
+    return (
+      <svg {...P}>
+        <path d="M14.8 5.2 L18.8 9.2 L9 19 L4.6 19.4 L5 15 Z M13 7 L17 11" />
+      </svg>
+    );
+  }
+  if (mode === "eraser") {
+    return (
+      <svg {...P}>
+        <path d="M13.6 5.4 L19.6 11.4 L11.8 19.2 L7.4 19.2 L4.4 16.2 C3.8 15.6, 3.8 14.6, 4.4 14 Z M8.6 9.4 L14.6 15.4 M11.8 19.2 H19.6" />
+      </svg>
+    );
+  }
+  if (mode === "laser") {
+    return (
+      <svg {...P}>
+        <path d="M4.5 19.5 L13.2 10.8" />
+        <path d="M16.6 4.2 L16.9 6.4 M20.2 7.4 L18 7.8 M19.5 3.9 L18.1 5.6" />
+        <circle cx="15.4" cy="8.6" r="2.1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
   return mode === "select" ? (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
       <path d="M6 3.5 L18.5 12 L12.5 13.2 L15.5 19.5 L13 20.6 L10.2 14.2 L6 17.5 Z" />
@@ -87,6 +138,16 @@ function ModeGlyph({ mode }: { mode: "select" | "arrow" }) {
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 20 C9 17, 14 11, 19 6" />
       <path d="M13.5 5.5 L19 6 L18.5 11.5" />
+    </svg>
+  );
+}
+
+/** Doodle padlock for the tool-lock slot (open shackle when unlocked). */
+function LockGlyph({ locked }: { locked: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5.5 11.2 C5.4 10.8, 18.7 10.6, 18.6 11.3 L18.4 19.6 C18.3 20.2, 5.8 20.3, 5.7 19.7 Z" />
+      <path d={locked ? "M8.3 11 V8 C8.2 4.6, 15.8 4.5, 15.7 8 V11" : "M8.3 11 V8 C8.2 4.6, 15.4 4.4, 15.6 7.2"} />
     </svg>
   );
 }
@@ -103,6 +164,7 @@ export function SimpleChrome() {
   // Undo/redo availability spans BOTH histories (same rule as the full topbar).
   const tool = useEditorStore((s) => s.tool);
   const drawSpec = useEditorStore((s) => s.drawSpec);
+  const toolLocked = useEditorStore((s) => s.toolLocked);
   const hasDiagramSelection = useDiagramStore((s) =>
     s.diagramSelection.some((id) => s.nodes[id] || s.edges[id]),
   );
@@ -131,6 +193,17 @@ export function SimpleChrome() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const a = document.activeElement as HTMLElement | null;
       if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) return;
+      // ⇧+letter belongs to the canvas (⇧H/⇧V flip) — never a tool switch.
+      if (e.shiftKey && /^[a-z]$/i.test(e.key)) return;
+      if (e.key === "q" || e.key === "Q") {
+        // Excalidraw tool lock — like the digits, never yields to type-to-edit.
+        e.preventDefault();
+        const ed = useEditorStore.getState();
+        const locked = !ed.toolLocked;
+        ed.setToolLocked(locked);
+        ed.setStatus(locked ? "Tool locked — stays armed after each draw (Q)." : "Tool unlocked.", "ok");
+        return;
+      }
       const ds = useDiagramStore.getState();
       // Letters yield to type-to-edit on a selected node (renaming). DIGITS
       // never do — they are the advertised tool keys and must keep working
@@ -145,8 +218,8 @@ export function SimpleChrome() {
       if (t.kind === "mode") useEditorStore.getState().setTool(t.mode);
       // Shape keys ARM the draw tool (Excalidraw): the next drag on the
       // canvas sizes the shape A→B; a plain click draws NOTHING (accidental
-      // taps stay consequence-free — see Canvas.startDrawShape). Sticky until
-      // Esc / Select — same contract as the arrow tool.
+      // taps stay consequence-free — see Canvas.startDrawShape). A finished
+      // draw drops back to Select unless the tool lock (Q) is on.
       else useEditorStore.getState().armDrawTool({ kind: t.entry.kind, init: entryInit(t.entry) });
     };
     window.addEventListener("keydown", onKey);
@@ -158,7 +231,7 @@ export function SimpleChrome() {
   useEffect(
     () => () => {
       const t = useEditorStore.getState().tool;
-      if (t === "arrow" || t === "draw") useEditorStore.getState().setTool("select");
+      if (t !== "select" && t !== "pan") useEditorStore.getState().setTool("select");
     },
     [],
   );
@@ -252,22 +325,28 @@ export function SimpleChrome() {
 
       {/* ---- top-center: tool island ---- */}
       <div className="simple-island simple-tools">
+        <button
+          className={`simple-tool${toolLocked ? " active" : ""}`}
+          title={toolLocked ? "Tool locked — stays armed after each draw (Q)" : "Keep the tool armed after drawing (Q)"}
+          aria-label="Tool lock"
+          aria-pressed={toolLocked}
+          onClick={() => useEditorStore.getState().setToolLocked(!toolLocked)}
+        >
+          <LockGlyph locked={toolLocked} />
+        </button>
+        <span className="simple-sep" />
         {ISLAND.map((t, i) =>
           t.kind === "mode" ? (
             <button
               key={`mode:${t.mode}`}
               className={`simple-tool${tool === t.mode ? " active" : ""}`}
-              title={
-                t.mode === "select"
-                  ? `Select (${keyHint(i)}) — the normal cursor`
-                  : `Arrow (${keyHint(i)}) — drag from any shape to draw a connector`
-              }
+              title={`${t.label} (${keyHint(i)}) — ${MODE_TITLES[t.mode]}`}
               aria-label={`${t.label} — keyboard ${keyHint(i)}`}
               aria-pressed={tool === t.mode}
               onClick={() => useEditorStore.getState().setTool(t.mode)}
             >
               <ModeGlyph mode={t.mode} />
-              <span className="simple-tool-key" aria-hidden="true">{i + 1}</span>
+              <span className="simple-tool-key" aria-hidden="true">{cornerKey(i)}</span>
             </button>
           ) : (
             <button
@@ -283,7 +362,7 @@ export function SimpleChrome() {
               <span className="simple-tool-glyph">
                 <MiniGlyph entry={t.entry} />
               </span>
-              <span className="simple-tool-key" aria-hidden="true">{i + 1}</span>
+              <span className="simple-tool-key" aria-hidden="true">{cornerKey(i)}</span>
             </button>
           ),
         )}

@@ -746,6 +746,7 @@ function labelFor(kind: NodeKind): string {
     case "sticky": return "";
     case "actor": return "Actor";
     case "icon": return "";
+    case "freedraw": return "";
     case "image": return "";
     default: return "Node";
   }

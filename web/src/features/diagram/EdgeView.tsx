@@ -26,13 +26,16 @@ import {
   FLOW_INTENSITY,
   type NodeMap,
 } from "../../editor-core/diagram";
-import type { ArrowHead, DiagramEdge, FlowIntensity } from "../../editor-core/diagram";
+import type { ArrowHead, DiagramEdge, DiagramNode, FlowIntensity } from "../../editor-core/diagram";
 import { screenToContent } from "../../editor-core";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
 import { panState } from "../../state/panState";
 import { beginEdgeLabelEdit } from "./edgeLabelEdit";
-import { LABEL_INK, FONT_STACKS, LABEL_CHIP, labelChipWidth, labelChipOffset } from "./typography";
+import { LABEL_INK, FONT_STACKS, LABEL_CHIP, labelChipWidth, labelChipOffset, nodeFontStack } from "./typography";
+
+/** The handwriting face sketch nodes use (one source: typography.nodeFontStack). */
+const SKETCH_LABEL_STACK = nodeFontStack({ sketch: true } as DiagramNode);
 
 const HIT_STROKE = 12;
 
@@ -55,9 +58,15 @@ function effectiveHead(explicit: ArrowHead | undefined, legacy: boolean): ArrowH
   return explicit ?? (legacy ? "arrow" : "none");
 }
 
+/** The Excalidraw open chevron (two strokes, no fill) used for "arrow" on
+ * hand-drawn edges; defined once in DiagramLayer's <defs>. */
+export const OPEN_ARROW_MARKER_ID = "diagram-head-arrow-open";
+
 /** marker url() for a head, or undefined for "none". */
-function headMarker(head: ArrowHead): string | undefined {
-  return head === "none" ? undefined : `url(#${headMarkerId(head)})`;
+function headMarker(head: ArrowHead, handDrawn = false): string | undefined {
+  if (head === "none") return undefined;
+  if (handDrawn && head === "arrow") return `url(#${OPEN_ARROW_MARKER_ID})`;
+  return `url(#${headMarkerId(head)})`;
 }
 
 /** Static dasharray for a non-animated line style (scaled by stroke width). */
@@ -161,12 +170,15 @@ export function EdgeView({
   const geom = useMemo(() => edgePath(edge, nodes), [key]);
   const selectedReal = useDiagramStore((s) => s.diagramSelection.includes(edge.id));
   const selected = preview ? false : selectedReal;
+  const erasing = useEditorStore((s) => !preview && s.eraseMarked.includes(edge.id));
 
   if (!geom) return null;
 
   const onPointerDown = (e: ReactPointerEvent) => {
     if (panState.spaceHeld) return; // hand-pan wins
     if (e.button !== 0) return;
+    const tool = useEditorStore.getState().tool;
+    if (tool === "draw" || tool === "text" || tool === "pen" || tool === "eraser" || tool === "laser") return; // Canvas owns it
     e.stopPropagation();
     const d = useDiagramStore.getState();
     const sel = d.diagramSelection;
@@ -211,6 +223,30 @@ export function EdgeView({
   const intensity = edge.flowIntensity ?? "normal";
   const params = FLOW_INTENSITY[intensity];
   const visId = `edge-vis-${edge.id}`;
+  // Excalidraw-style labels on hand-drawn boards: when either end is a
+  // `sketch` shape, the text sits ON the line in the handwriting face and the
+  // line breaks around it (a mask, so the gap is truly transparent on any
+  // ground). Editorial boards keep ADR-0009's lifted mono chip — the gate and
+  // layout repair (backend) model THAT geometry.
+  const endNode = (a: DiagramEdge["source"]) => ("nodeId" in a ? nodes[a.nodeId] : undefined);
+  const ends = [endNode(edge.source), endNode(edge.target)].filter(Boolean) as DiagramNode[];
+  // EDITORIAL only when the arrow connects shapes and none of them is
+  // hand-drawn (AI-generated editorial boards); everything else — sketch
+  // shapes, free-standing arrows — gets the Excalidraw look.
+  const handDrawn = !(ends.length > 0 && ends.every((n) => !n.sketch));
+  const inlineLabels = handDrawn;
+  const labelBlocks = [
+    ...(edge.label ? [{ key: "legacy", p: { x: mx, y: my }, text: edge.label }] : []),
+    ...(edge.labels ?? []).map((lb) => ({ key: lb.id, p: pointAtT(geom.points, lb.t), text: lb.text })),
+  ].filter((b) => b.text.trim());
+  const maskId = `edge-mask-${edge.id}`;
+  const useMask = inlineLabels && !preview && labelBlocks.length > 0;
+  const maskBox = (() => {
+    const xs = geom.points.map((p) => p.x);
+    const ys = geom.points.map((p) => p.y);
+    const PAD = 60; // room for arrowheads, which the mask must not clip
+    return { x: Math.min(...xs) - PAD, y: Math.min(...ys) - PAD, w: Math.max(...xs) - Math.min(...xs) + PAD * 2, h: Math.max(...ys) - Math.min(...ys) + PAD * 2 };
+  })();
   const strokeColor = selected ? "#2563eb" : edge.stroke;
 
   // Endpoint decorations — explicit head wins, else derive from the legacy
@@ -241,7 +277,19 @@ export function EdgeView({
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
       style={{ cursor: "pointer" }}
+      opacity={erasing ? 0.25 : undefined}
     >
+      {useMask && (
+        <defs>
+          <mask id={maskId} maskUnits="userSpaceOnUse" x={maskBox.x} y={maskBox.y} width={maskBox.w} height={maskBox.h}>
+            <rect x={maskBox.x} y={maskBox.y} width={maskBox.w} height={maskBox.h} fill="#fff" />
+            {labelBlocks.map((b) => {
+              const w = inlineLabelWidth(b.text);
+              return <rect key={b.key} x={b.p.x - w / 2} y={b.p.y - INLINE_H / 2} width={w} height={INLINE_H} rx={4} fill="#000" />;
+            })}
+          </mask>
+        </defs>
+      )}
       {/* wide invisible hit area for easy selection */}
       <path
         d={geom.d}
@@ -260,8 +308,9 @@ export function EdgeView({
         stroke={strokeColor}
         strokeWidth={edge.strokeWidth}
         opacity={flow === "beam" ? params.beamBaseOpacity : undefined}
-        markerEnd={headMarker(endHead)}
-        markerStart={headMarker(startHead)}
+        markerEnd={headMarker(endHead, handDrawn)}
+        markerStart={headMarker(startHead, handDrawn)}
+        mask={useMask ? `url(#${maskId})` : undefined}
         style={visStyle}
       />
       {/* beam: a bright comet sweeping over the dimmed base line */}
@@ -298,6 +347,7 @@ export function EdgeView({
           floating ON the line (double-click a chip to edit just that block). */}
       {edge.label && (
         <LabelChip
+          inline={inlineLabels}
           cx={mx}
           cy={my}
           dir={segmentDirAtT(geom.points, 0.5)}
@@ -310,6 +360,7 @@ export function EdgeView({
         return (
           <LabelChip
             key={lb.id}
+            inline={inlineLabels}
             cx={p.x}
             cy={p.y}
             dir={segmentDirAtT(geom.points, lb.t)}
@@ -331,12 +382,21 @@ export function EdgeView({
 /** A rounded white chip with centered text, sitting CLEAR of the connector
  * (see LABEL_CHIP.GAP — a label must never hide the line it annotates).
  * Double-click edits this block; press-and-drag slides it along the line. */
+/** Inline (Excalidraw) label metrics — the mask gap and the hit box. */
+const INLINE_FS = 16;
+const INLINE_H = INLINE_FS + 10;
+function inlineLabelWidth(text: string): number {
+  return Math.max(18, text.length * INLINE_FS * 0.56 + 14);
+}
+
 function LabelChip({
-  cx, cy, dir, text, onEdit, onDragTo,
+  cx, cy, dir, text, onEdit, onDragTo, inline = false,
 }: {
   cx: number; cy: number; dir: { x: number; y: number }; text: string;
   onEdit: () => void;
   onDragTo?: (clientX: number, clientY: number) => void;
+  /** Hand-drawn board: text ON the line, handwriting face, line masked. */
+  inline?: boolean;
 }) {
   const fs = LABEL_CHIP.FONT_SIZE;
   const chipW = labelChipWidth(text);
@@ -358,6 +418,23 @@ function LabelChip({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  if (inline) {
+    const w = inlineLabelWidth(text);
+    return (
+      <g
+        style={{ cursor: onDragTo ? "grab" : "text" }}
+        onPointerDown={onPointerDown}
+        onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}
+      >
+        {/* transparent hit box — the line's gap comes from the edge mask */}
+        <rect x={cx - w / 2} y={cy - INLINE_H / 2} width={w} height={INLINE_H} fill="transparent" />
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fontSize={INLINE_FS}
+          fontFamily={SKETCH_LABEL_STACK} fill={LABEL_INK} style={{ userSelect: "none" }}>
+          {text}
+        </text>
+      </g>
+    );
+  }
   return (
     <g
       style={{ cursor: onDragTo ? "grab" : "text" }}

@@ -13,46 +13,64 @@
  *
  * PURE presentation: no store imports, no side effects — just node → SVG.
  */
-import type { DiagramNode, NodeKind } from "../../editor-core/diagram";
+import { freedrawOutline, freedrawPath, type DiagramNode, type NodeKind } from "../../editor-core/diagram";
 import { SHAPE_DEFS } from "../../editor-core/diagram/shapeDefs";
-import { ICONS, iconDef, type IconDef } from "./icons";
+import { ICON_CATEGORIES, ICONS, iconDef, type IconCategory, type IconDef } from "./icons";
 import { SHAPE_RENDERERS } from "./shapes";
 
-/** A colored tile + white line-glyph for an `icon`-kind node. */
-function IconBadge({
-  def,
-  x,
-  y,
-  w,
-  h,
-}: {
-  def: IconDef;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}) {
-  const bs = Math.min(w * 0.62, h * 0.52); // badge side
-  const bx = x + (w - bs) / 2;
-  const by = y + Math.max(8, h * 0.12);
-  const r = Math.max(4, bs * 0.2);
-  const s = bs / 24; // motif authored in a 0..24 box
-  const sw = 1.9 / s; // ~1.9 content units after the scale (matches node strokes)
+/**
+ * The icon itself, `side`×`side` at (x, y): an accent tile + glyph ("tile")
+ * or a bare multi-colour glyph ("glyph"). Gradient ids derive from the icon
+ * KEY, so every instance of one icon shares identical defs (duplicate ids
+ * with identical content are harmless) and the bake/export keeps them.
+ */
+/** Stroke trim for glyphs drawn on a tile (AWS) — see IconGraphic. */
+const TILE_STROKE_SCALE = 0.78;
+
+export function IconGraphic({ def, x, y, side }: { def: IconDef; x: number; y: number; side: number }) {
+  const s = side / 24; // authored in a 0..24 box
+  const tile = (def.style ?? "tile") === "tile";
+  const gid = (i: number) => `ig-${def.key}-${i}`;
+  // Tile glyphs read heavy at the authored weight next to 13px captions
+  // — one global trim keeps every tile set consistent.
+  const swScale = tile ? TILE_STROKE_SCALE : 1;
+  const parts = def.parts;
   return (
-    <g style={{ pointerEvents: "none" }}>
-      <rect x={bx} y={by} width={bs} height={bs} rx={r} ry={r} fill={def.accent} />
-      <g
-        transform={`translate(${bx} ${by}) scale(${s})`}
-        fill="none"
-        stroke="#ffffff"
-        strokeWidth={sw}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        {def.motif.map((d, i) => (
-          <path key={i} d={d} />
-        ))}
-      </g>
+    <g transform={`translate(${x} ${y}) scale(${s})`} style={{ pointerEvents: "none" }}>
+      {parts?.some((p) => p.grad) && (
+        <defs>
+          {parts.map((p, i) =>
+            p.grad ? (
+              <linearGradient key={i} id={gid(i)} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor={p.grad[0]} />
+                <stop offset="1" stopColor={p.grad[1]} />
+              </linearGradient>
+            ) : null,
+          )}
+        </defs>
+      )}
+      {tile && <rect width={24} height={24} rx={def.tileRadius ?? 1.2} fill={def.accent} />}
+      {parts
+        ? parts.map((p, i) => (
+            <path
+              key={i}
+              d={p.d}
+              fill={p.grad ? `url(#${gid(i)})` : p.fill ?? "none"}
+              stroke={p.stroke ?? (tile && !p.fill && !p.grad ? "#ffffff" : "none")}
+              strokeWidth={(p.sw ?? 1.4) * swScale}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={p.opacity}
+            />
+          ))
+        : (
+          // legacy motif: white strokes, ~1.9 content px regardless of size
+          <g fill="none" stroke="#ffffff" strokeWidth={1.9 / s} strokeLinecap="round" strokeLinejoin="round">
+            {def.motif.map((d, i) => (
+              <path key={i} d={d} />
+            ))}
+          </g>
+        )}
     </g>
   );
 }
@@ -323,12 +341,58 @@ export function shapeElement(node: DiagramNode) {
       );
     }
 
-    case "icon": {
-      const def = iconDef(node.iconKey);
+    case "freedraw": {
+      // Pen ink: the stroke IS the shape (no fill/box). A wide transparent
+      // copy makes it easy to click/erase without a bounding-box hit area.
+      // Brush (node.pen): pen = pressure-thinned filled outline; marker =
+      // even stroke; highlighter = wide translucent multiply; softness blurs
+      // the edge. All render-time — the stored points never change.
+      const brush = node.pen ?? {};
+      const type = brush.type ?? "pen";
+      const d = freedrawPath(node.points, x, y, w, h);
+      const hl = type === "highlighter";
+      const size = hl ? strokeWidth * 3 : strokeWidth;
+      const outline = type === "pen" ? freedrawOutline(node.points, x, y, w, h, size, brush) : "";
+      const soft = Math.min(1, Math.max(0, brush.softness ?? 0));
+      const blurId = soft > 0 ? `pen-soft-${node.id}` : undefined;
       return (
         <g>
-          <rect x={x} y={y} width={w} height={h} rx={12} ry={12} {...common} />
-          {def && <IconBadge def={def} x={x} y={y} w={w} h={h} />}
+          {blurId && (
+            <defs>
+              <filter id={blurId} x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation={Math.max(0.3, size * soft * 0.45)} />
+              </filter>
+            </defs>
+          )}
+          <path d={d} fill="none" stroke="transparent" strokeWidth={Math.max(12, size + 10)}
+            strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: "stroke" }} />
+          <g filter={blurId ? `url(#${blurId})` : undefined}
+            style={hl ? { mixBlendMode: "multiply" } : undefined} opacity={hl ? 0.38 : undefined}>
+            {outline ? (
+              <path d={outline} fill={stroke} stroke="none" />
+            ) : (
+              <path d={d} fill="none" stroke={stroke} strokeWidth={size}
+                strokeLinecap={hl ? "butt" : "round"} strokeLinejoin="round" />
+            )}
+          </g>
+        </g>
+      );
+    }
+
+    case "icon": {
+      // A SINGLE shape (Lucid): the node box is the icon — no card around it;
+      // the caption renders BELOW the box (NodeView). A transparent rect keeps
+      // the whole box hit-testable for glyph-style icons with open areas.
+      const def = iconDef(node.iconKey);
+      const side = Math.min(w, h);
+      return (
+        <g>
+          <rect x={x} y={y} width={w} height={h} fill="transparent" stroke="none" />
+          {def ? (
+            <IconGraphic def={def} x={x + (w - side) / 2} y={y + (h - side) / 2} side={side} />
+          ) : (
+            <rect x={x} y={y} width={w} height={h} rx={6} fill="none" stroke="#9aa3b2" strokeDasharray="4 3" />
+          )}
         </g>
       );
     }
@@ -390,6 +454,21 @@ export interface PaletteEntry {
 export interface PaletteSection {
   name: string;
   entries: PaletteEntry[];
+  /** Toggleable stencil library this section belongs to (defaults to `name`)
+   * — the cloud libraries span one section per service cluster. */
+  library?: string;
+  /** Cluster colour dot for the section header. */
+  color?: string;
+}
+
+/** One section per service cluster ("AWS · Compute", …), draw.io-style. */
+function cloudSections(group: IconDef["group"], lib: string): PaletteSection[] {
+  return ICON_CATEGORIES.map((c) => ({
+    name: `${lib} · ${c.label}`,
+    library: lib,
+    color: c.color,
+    entries: iconEntries(group, c.id),
+  })).filter((s) => s.entries.length > 0);
 }
 
 const BASIC: PaletteEntry[] = [
@@ -426,9 +505,9 @@ const FLOWCHART: PaletteEntry[] = [
 const ARROWS: PaletteEntry[] = defEntries("arrows");
 const UML: PaletteEntry[] = defEntries("uml");
 
-function iconEntries(group: IconDef["group"]): PaletteEntry[] {
+function iconEntries(group: IconDef["group"], category?: IconCategory): PaletteEntry[] {
   return Object.values(ICONS)
-    .filter((i) => i.group === group)
+    .filter((i) => i.group === group && (!category || i.category === category))
     .map((i) => ({
       kind: "icon" as NodeKind,
       label: i.label,
@@ -461,9 +540,9 @@ export const SHAPE_SECTIONS: PaletteSection[] = [
   { name: "Flowchart", entries: FLOWCHART },
   { name: "Arrows", entries: ARROWS },
   { name: "UML", entries: UML },
-  { name: "AWS", entries: iconEntries("aws") },
-  { name: "GCP", entries: iconEntries("gcp") },
-  { name: "Azure", entries: iconEntries("azure") },
+  ...cloudSections("aws", "AWS"),
+  ...cloudSections("gcp", "GCP"),
+  ...cloudSections("azure", "Azure"),
   { name: "Databricks / Data", entries: iconEntries("data") },
   { name: "Network", entries: iconEntries("network") },
 ];
@@ -502,7 +581,7 @@ export function inUseEntries(nodes: DiagramNode[]): PaletteEntry[] {
 }
 
 /** A tiny SVG preview of a catalog entry, used inside a palette cell. */
-export function MiniGlyph({ entry }: { entry: PaletteEntry }) {
+export function MiniGlyph({ entry, mono = false }: { entry: PaletteEntry; mono?: boolean }) {
   // The text element renders no shape at all — preview it as a letter.
   if (entry.kind === "text") {
     return (
@@ -519,9 +598,9 @@ export function MiniGlyph({ entry }: { entry: PaletteEntry }) {
           id: "_m",
           kind: "icon",
           iconKey: entry.iconKey,
-          x: 9,
+          x: 7,
           y: 1,
-          w: 26,
+          w: 30,
           h: 30,
           text: "",
           fill: "#ffffff",
@@ -538,9 +617,11 @@ export function MiniGlyph({ entry }: { entry: PaletteEntry }) {
           text: "",
           // Honor the entry's own colors (e.g. the 6 sticky-note colors) so the
           // palette preview matches what gets added; fall back to a neutral tile.
-          fill: entry.fill ?? "#eef4ff",
-          stroke: entry.stroke ?? "#5b6472",
-          strokeWidth: 1.5,
+          // `mono` (the tool island): Excalidraw-style outline in the
+          // button's text colour — no fills, so the toolbar reads as one set.
+          fill: mono ? "none" : entry.fill ?? "#eef4ff",
+          stroke: mono ? "currentColor" : entry.stroke ?? "#5b6472",
+          strokeWidth: mono ? 1.6 : 1.5,
         };
   return (
     <svg viewBox="0 0 44 32" width="100%" height="100%" style={{ display: "block" }} aria-hidden="true">

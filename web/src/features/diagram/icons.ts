@@ -7,13 +7,102 @@
  * service category (a chip, a bucket, a cylinder, stacked chevrons, …) so a
  * board reads at a glance. Swap for licensed icon sets before any real use.
  *
- * Pure data (no React/DOM). Each `motif` entry is a list of SVG path `d`
- * strings authored in a 0..24 coordinate box; the renderer (ShapePalette
- * `IconBadge`) scales that box into the node's glyph area and strokes the paths
- * in white on the accent-colored tile. `abbrev` labels the drag ghost.
+ * Pure data (no React/DOM), authored in a 0..24 coordinate box that the
+ * renderer (ShapePalette `IconGraphic`) scales onto the node. An icon node is a
+ * SINGLE shape (Lucid-style): no card around it — the node box IS the icon and
+ * the caption sits below it. Two visual styles:
+ *   • "tile"  (AWS-like)    — a flat accent square, white line/fill glyph on it;
+ *   • "glyph" (Azure/GCP-like) — no tile, a multi-colour glyph (flat or
+ *     two-stop vertical gradients) drawn straight on the canvas.
+ * `parts` carry per-path paint; legacy `motif` (white strokes on the tile) is
+ * still honoured for the inline data/network marks. `abbrev` labels the drag
+ * ghost.
  */
 
+/** One painted path of an icon, in the 0..24 box. */
+export interface IconPart {
+  d: string;
+  /** Fill colour; omitted → "none". */
+  fill?: string;
+  /** Vertical two-stop gradient [top, bottom] — wins over `fill`. */
+  grad?: [string, string];
+  /** Stroke colour; omitted → white on a tile, none on a glyph. */
+  stroke?: string;
+  /** Stroke width in box units (default 1.4 on a tile when stroked). */
+  sw?: number;
+  opacity?: number;
+}
+
 export type IconGroup = "aws" | "data" | "azure" | "network" | "gcp";
+
+/**
+ * Service clusters shared by all three clouds (draw.io / Lucid section
+ * grammar). `color` is the AWS architecture-icon category colour: it paints
+ * every AWS tile (so a cluster reads as one hue) and the section dots in the
+ * Shapes panel and Library. Azure / Google keep their own brand palettes —
+ * their official icons are not category-coloured either.
+ */
+export const ICON_CATEGORIES = [
+  { id: "compute", label: "Compute", color: "#ED7100" },
+  { id: "containers", label: "Containers", color: "#ED7100" },
+  { id: "storage", label: "Storage", color: "#7AA116" },
+  { id: "database", label: "Database", color: "#C925D1" },
+  { id: "networking", label: "Networking & CDN", color: "#8C4FFF" },
+  { id: "integration", label: "App Integration", color: "#E7157B" },
+  { id: "analytics", label: "Analytics", color: "#8C4FFF" },
+  { id: "ai", label: "AI & ML", color: "#01A88D" },
+  { id: "security", label: "Security & Identity", color: "#DD344C" },
+  { id: "management", label: "Management & DevOps", color: "#E7157B" },
+  { id: "frontend", label: "Front-end & Web", color: "#DD344C" },
+] as const;
+export type IconCategory = (typeof ICON_CATEGORIES)[number]["id"];
+export const CATEGORY_META: Record<IconCategory, { label: string; color: string }> = Object.fromEntries(
+  ICON_CATEGORIES.map((c) => [c.id, { label: c.label, color: c.color }]),
+) as Record<IconCategory, { label: string; color: string }>;
+
+/** key → cluster. One table (not per-entry fields) so re-filing a service
+ * is a one-line change and nothing in the stencil art files moves. */
+const CATEGORY_OF: Record<string, IconCategory> = {
+  // AWS
+  "aws-ec2": "compute", "aws-lambda": "compute", "aws-beanstalk": "compute",
+  "aws-ecs": "containers", "aws-eks": "containers", "aws-fargate": "containers", "aws-ecr": "containers",
+  "aws-s3": "storage", "aws-glacier": "storage", "aws-efs": "storage",
+  "aws-rds": "database", "aws-aurora": "database", "aws-dynamodb": "database", "aws-elasticache": "database",
+  "aws-vpc": "networking", "aws-cloudfront": "networking", "aws-route53": "networking", "aws-elb": "networking",
+  "aws-apigw": "integration", "aws-sqs": "integration", "aws-sns": "integration", "aws-eventbridge": "integration",
+  "aws-sfn": "integration", "aws-appsync": "integration",
+  "aws-kinesis": "analytics", "aws-redshift": "analytics", "aws-athena": "analytics", "aws-glue": "analytics",
+  "aws-sagemaker": "ai", "aws-bedrock": "ai",
+  "aws-iam": "security", "aws-cognito": "security", "aws-secrets-manager": "security", "aws-kms": "security",
+  "aws-waf": "security", "aws-shield": "security",
+  "aws-cloudwatch": "management", "aws-cloudformation": "management", "aws-cloudtrail": "management",
+  "aws-amplify": "frontend",
+  // Azure
+  "az-vm": "compute", "az-appsvc": "compute", "az-functions": "compute",
+  "az-aks": "containers", "az-containerapps": "containers", "az-acr": "containers",
+  "az-blob": "storage", "az-storage": "storage",
+  "az-sql": "database", "az-cosmos": "database", "az-redis": "database",
+  "az-vnet": "networking", "az-lb": "networking", "az-appgw": "networking", "az-frontdoor": "networking",
+  "az-apim": "integration", "az-servicebus": "integration", "az-eventhub": "integration",
+  "az-eventgrid": "integration", "az-logicapps": "integration",
+  "az-datafactory": "analytics", "az-synapse": "analytics", "az-databricks": "analytics",
+  "az-openai": "ai",
+  "az-keyvault": "security", "az-entra": "security",
+  "az-monitor": "management", "az-appinsights": "management",
+  "az-staticweb": "frontend",
+  // Google Cloud
+  "gcp-gce": "compute", "gcp-run": "compute", "gcp-func": "compute", "gcp-appengine": "compute",
+  "gcp-gke": "containers", "gcp-artifact": "containers",
+  "gcp-gcs": "storage",
+  "gcp-sql": "database", "gcp-spanner": "database", "gcp-firestore": "database", "gcp-bigtable": "database",
+  "gcp-memorystore": "database",
+  "gcp-vpc": "networking", "gcp-lb": "networking", "gcp-cdn": "networking", "gcp-dns": "networking",
+  "gcp-apigee": "integration", "gcp-pubsub": "integration", "gcp-workflows": "integration", "gcp-scheduler": "integration",
+  "gcp-bq": "analytics", "gcp-dataflow": "analytics", "gcp-dataproc": "analytics", "gcp-looker": "analytics",
+  "gcp-vertex": "ai", "gcp-gemini": "ai",
+  "gcp-armor": "security", "gcp-iam": "security", "gcp-secrets": "security",
+  "gcp-logging": "management", "gcp-monitoring": "management", "gcp-build": "management",
+};
 
 export interface IconDef {
   /** Registry key stored on the node as `iconKey`. */
@@ -25,8 +114,16 @@ export interface IconDef {
   accent: string;
   /** Short code shown on the drag ghost. */
   abbrev: string;
-  /** White line-glyph paths in a 0..24 box. */
+  /** Legacy: white line-glyph paths in a 0..24 box (used when no `parts`). */
   motif: string[];
+  /** "tile" (default) = accent square + glyph; "glyph" = no tile. */
+  style?: "tile" | "glyph";
+  /** Painted paths (preferred over `motif`). */
+  parts?: IconPart[];
+  /** Tile corner radius in box units (default 1.2 — AWS tiles are near-square). */
+  tileRadius?: number;
+  /** Service cluster (from CATEGORY_OF) — sections + AWS tile colour. */
+  category?: IconCategory;
 }
 
 import { AWS_ICONS } from "./stencils/aws";
@@ -322,7 +419,14 @@ const INLINE_ICONS: Record<string, IconDef> = {
 // a stencil entry wins on key collision; inline-only groups (data/network) stay.
 export const ICONS: Record<string, IconDef> = {
   ...INLINE_ICONS,
-  ...Object.fromEntries([...AWS_ICONS, ...AZURE_ICONS, ...GCP_ICONS].map((i) => [i.key, i])),
+  ...Object.fromEntries(
+    [...AWS_ICONS, ...AZURE_ICONS, ...GCP_ICONS].map((i) => {
+      const category = CATEGORY_OF[i.key];
+      // AWS tiles wear their CLUSTER colour, so a section is one hue.
+      const accent = i.group === "aws" && category ? CATEGORY_META[category].color : i.accent;
+      return [i.key, { ...i, category, accent }];
+    }),
+  ),
 };
 
 export function iconDef(key: string | undefined): IconDef | undefined {

@@ -3,7 +3,9 @@
  *
  * An absolutely-positioned <textarea> over the node's label on screen —
  * multi-line on purpose: **Enter inserts a line break** (the Excel/Lucid
- * expectation), ⌘/Ctrl+Enter or clicking away commits, Escape cancels.
+ * expectation); ⌘/Ctrl+Enter, Escape or clicking away all SAVE (Excalidraw —
+ * Esc used to cancel and silently threw the typing away; ⌘Z undoes a save).
+ * A small hint chip under the editor says so, since Simple mode has no status bar.
  * Text is stored as a plain string in the store and rendered as React text
  * nodes (never injected as markup), so no escaping is needed.
  */
@@ -11,6 +13,7 @@ import { contentToStage } from "../../editor-core";
 import type { DiagramNode } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
+import { nodeFontStack } from "./typography";
 
 export function beginNodeTextEdit(
   node: DiagramNode,
@@ -18,6 +21,9 @@ export function beginNodeTextEdit(
     /** Type-to-edit: seed the editor with the first typed character,
      * REPLACING the current label (Lucid behavior), caret at the end. */
     seed?: string;
+    /** Called once editing ends (commit or cancel) with the node's final
+     * text — lets a caller drop a throwaway label that ended up empty. */
+    onEnd?: (text: string) => void;
   },
 ): void {
   const refs = useEditorStore.getState().refs;
@@ -26,9 +32,12 @@ export function beginNodeTextEdit(
   const z = useEditorStore.getState().cam.z;
 
   // The label anchor in content space — must match NodeView's label position:
-  // icon tiles caption the BOTTOM band (badge fills the top), everything else
+  // icons are single shapes whose caption hangs BELOW the box; everything else
   // is vertically centered. Otherwise the edit box floats over the glyph.
-  const labelCy = node.kind === "icon" ? node.y + node.h * 0.87 : node.y + node.h / 2;
+  const labelCy =
+    node.kind === "icon"
+      ? node.y + node.h + 6 + ((node.fontSize ?? 14) * 1.25) / 2 // caption hangs below the icon
+      : node.y + node.h / 2;
   const c = contentToStage(refs.content, host, node.x + node.w / 2, labelCy);
 
   // The editor is BORDERLESS chrome over the shape — hide the SVG label
@@ -56,7 +65,7 @@ export function beginNodeTextEdit(
   inp.style.left = c.x - wScreen / 2 + "px";
   inp.style.fontSize = fsScreen + "px";
   inp.style.lineHeight = lineH + "px";
-  inp.style.textAlign = "center";
+  inp.style.textAlign = node.textAlign ?? "center";
   inp.style.resize = "none";
   inp.style.overflow = "hidden";
   inp.style.whiteSpace = "pre";
@@ -64,9 +73,10 @@ export function beginNodeTextEdit(
   inp.style.color = node.textColor ?? "#1a1d23";
   inp.style.fontWeight = node.bold ? "700" : "400";
   inp.style.fontStyle = node.italic ? "italic" : "normal";
-  if (node.sketch) {
-    inp.style.fontFamily = '"Comic Sans MS", "Segoe Print", "Bradley Hand", cursive';
-  }
+  inp.style.textDecoration = node.underline ? "underline" : "none";
+  // Same face the label renders with (sketch handwriting outranks a family).
+  const stack = nodeFontStack(node);
+  if (stack) inp.style.fontFamily = stack;
   sizeToContent();
   host.appendChild(inp);
   inp.focus();
@@ -78,13 +88,24 @@ export function beginNodeTextEdit(
 
   useEditorStore
     .getState()
-    .setStatus("Editing text · Enter = new line · ⌘/Ctrl+Enter or click away to save · Esc cancels.");
+    .setStatus("Editing text · Enter = new line · Esc, ⌘/Ctrl+Enter or click away saves.");
+  // Visible save affordance right under the editor (editor chrome only).
+  const hint = document.createElement("div");
+  hint.className = "text-edit-hint";
+  hint.textContent = "Esc or click outside to save · Enter = new line";
+  const placeHint = () => {
+    const r = inp.getBoundingClientRect();
+    const hr = host.getBoundingClientRect();
+    hint.style.left = r.left - hr.left + r.width / 2 + "px";
+    hint.style.top = r.bottom - hr.top + 6 + "px";
+  };
 
   let done = false;
   const finish = (commit: boolean) => {
     if (done) return;
     done = true;
     if (svgLabel) svgLabel.style.visibility = "";
+    hint.remove();
     // A TEXT element with nothing in it is invisible and unfindable — treat
     // an empty commit (or a cancelled brand-new one) as "never mind".
     if (node.kind === "text" && (commit ? inp.value : node.text).trim() === "") {
@@ -99,9 +120,15 @@ export function beginNodeTextEdit(
       useEditorStore.getState().setStatus("Text updated.", "ok");
     }
     inp.remove();
+    opts?.onEnd?.(useDiagramStore.getState().nodes[node.id]?.text ?? "");
   };
   inp.addEventListener("blur", () => finish(true));
-  inp.addEventListener("input", sizeToContent);
+  inp.addEventListener("input", () => {
+    sizeToContent();
+    placeHint();
+  });
+  host.appendChild(hint);
+  placeHint();
   inp.addEventListener("keydown", (ev) => {
     ev.stopPropagation();
     const meta = ev.metaKey || ev.ctrlKey;
@@ -110,7 +137,7 @@ export function beginNodeTextEdit(
       finish(true);
     } else if (ev.key === "Escape") {
       ev.preventDefault();
-      finish(false);
+      finish(true); // save, never discard (Excalidraw) — ⌘Z reverts
     } else if (meta && !ev.shiftKey && ["b", "i", "u"].includes(ev.key.toLowerCase())) {
       // format WHILE typing — applies to the node being edited
       ev.preventDefault();

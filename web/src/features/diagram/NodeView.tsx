@@ -15,7 +15,7 @@
 import { useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { screenToContent } from "../../editor-core";
-import { cycleCss, NODE_ANIM_CYCLE_MS } from "../../editor-core/diagram";
+import { cycleCss, NODE_ANIM_CYCLE_MS, freedrawPath } from "../../editor-core/diagram";
 import type { DiagramNode } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
@@ -24,11 +24,10 @@ import { panState } from "../../state/panState";
 import { beginNodeTextEdit } from "./nodeTextEdit";
 import { LABEL_INK, nodeFontStack } from "./typography";
 import { ConnectionPorts, type PreviewEdge } from "./ConnectionPorts";
-import { DirectionalArrows } from "./DirectionalArrows";
 import { shapeElement } from "./ShapePalette";
 import { labelLines } from "./textWrap";
 
-const SELECT_STROKE = "#2563eb";
+const SELECT_STROKE = "#6965db"; // Excalidraw selection violet
 /** Snap increment — half of the 22px background grid. */
 const SNAP = 11;
 /** Forgiving hover halo around the node so ports are easy to reach. */
@@ -48,15 +47,21 @@ export function NodeView({
   /** Bubble the drag-to-connect preview up to DiagramLayer for rendering. */
   onPreviewChange: (p: PreviewEdge | null) => void;
 }) {
+  // Per-shape selection chrome (outline + grips) only for a SOLO selection;
+  // a multi-selection / group gets ONE SelectionFrame instead (Excalidraw).
+  const inMulti = useDiagramStore((s) => s.diagramSelection.length > 1 && s.diagramSelection.includes(node.id));
   const selected = useDiagramStore((s) =>
-    s.diagramSelection.includes(node.id),
+    s.diagramSelection.length === 1 && s.diagramSelection[0] === node.id,
   );
-  // draw.io-style growth arrows only make sense on a SOLO selection — and
-  // only while the user hasn't switched the affordance off (Properties panel).
-  const soloSelected = useDiagramStore(
-    (s) => s.diagramSelection.length === 1 && s.diagramSelection[0] === node.id,
-  );
-  const quickAddOn = useAppStore((s) => s.quickAddOn);
+  // Connect affordance (ports + border band) exists ONLY in arrow mode —
+  // select mode is pure move/resize.
+  const arrowMode = useEditorStore((s) => s.tool === "arrow");
+  // OSS keeps the docked Full UI, which has no Arrow tool button — there the
+  // select tool still draws connectors from a shape's border (pre-sync
+  // behavior). Simple mode follows Excalidraw: connectors only in Arrow mode.
+  const selectTool = useEditorStore((s) => s.tool === "select");
+  const fullUi = useAppStore((s) => s.uiMode === "full");
+  const connectMode = arrowMode || (fullUi && selectTool);
   // Hand cursor: open hand (grab) over a shape, closed hand (grabbing) while
   // dragging it — the Lucid/Figma affordance for "this is draggable".
   const dragging = useDiagramStore((s) => s.draggingId === node.id);
@@ -65,24 +70,34 @@ export function NodeView({
   const onPointerDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     if (panState.spaceHeld) return; // Space-pan owns the gesture — hand drags the page
-    // Draw tool armed: the canvas draws the new shape — even over this node
-    // (Excalidraw semantics). Let the event bubble to the stage handler.
-    if (useEditorStore.getState().tool === "draw") return;
+    // An armed draw/text tool draws/types here instead (Canvas owns it).
+    const t = useEditorStore.getState().tool;
+    if (t === "draw" || t === "text" || t === "pen" || t === "eraser" || t === "laser") return;
     e.stopPropagation();
     const d = useDiagramStore.getState();
     // Keep both nodes AND edges — mixed selections group/delete together;
     // the drag below only moves the node ids among them.
     let sel = d.diagramSelection.filter((id) => d.nodes[id] || d.edges[id]);
-    // A grouped node selects/deselects its whole group (⌘G unit).
+    // A grouped node selects/deselects its whole group (⌘G unit);
+    // ⌘/Ctrl-click DEEP-selects just this member (Figma), to edit or move it
+    // alone without ungrouping.
     const gid = d.nodes[node.id]?.groupId;
-    const members = gid
+    const deep = !!gid && (e.metaKey || e.ctrlKey) && !e.shiftKey;
+    const members = gid && !deep
       ? Object.values(d.nodes).filter((n) => n.groupId === gid).map((n) => n.id)
       : [node.id];
-    if (e.shiftKey) {
-      sel = sel.includes(node.id)
-        ? sel.filter((id) => !members.includes(id))
-        : [...sel, ...members.filter((id) => !sel.includes(id))];
+    if (deep) {
+      sel = [node.id];
       d.setDiagramSelection(sel);
+    } else if (e.shiftKey) {
+      // Toggle within the FULL selection — selected arrows must survive a
+      // shift-click on a shape (multi-select of shapes + arrows).
+      const full = d.diagramSelection;
+      const next = full.includes(node.id)
+        ? full.filter((id) => !members.includes(id))
+        : [...full, ...members.filter((id) => !full.includes(id))];
+      d.setDiagramSelection(next);
+      sel = next.filter((id) => d.nodes[id]);
       if (!sel.includes(node.id)) return; // toggled off → no drag
     } else if (!sel.includes(node.id)) {
       sel = members;
@@ -146,17 +161,19 @@ export function NodeView({
   const TEXT_PAD = 8;
   const tx = align === "left" ? node.x + TEXT_PAD : align === "right" ? node.x + node.w - TEXT_PAD : cx;
   const textAnchor = align === "left" ? "start" : align === "right" ? "end" : "middle";
-  // Icon tiles draw their badge in the upper ~62% of the node, so the caption
-  // sits in the bottom band instead of the vertical center (else it overlaps
-  // the glyph). All other kinds keep the centered label.
-  const textY = node.kind === "icon" ? node.y + node.h * 0.87 : cy;
-  // Multi-line block stays vertically centered on textY: shift the first
-  // line up by half the extra lines' height.
+  // Multi-line block stays vertically centered on the label anchor: shift the
+  // first line up by half the extra lines' height. Icons are SINGLE shapes
+  // (Lucid): the caption hangs BELOW the icon box instead.
   const lines = labelLines(node);
   const lineHeight = (node.fontSize ?? 14) * 1.25;
-  const firstLineY = textY - ((lines.length - 1) * lineHeight) / 2;
+  const firstLineY =
+    node.kind === "icon"
+      ? node.y + node.h + 6 + lineHeight / 2
+      : cy - ((lines.length - 1) * lineHeight) / 2;
   // Node-level opacity (absent/1 → omitted so the attribute never bloats saves).
   const nodeOpacity = node.opacity != null && node.opacity !== 1 ? node.opacity : undefined;
+  // Eraser sweep: marked objects fade until the pointer is released.
+  const erasing = useEditorStore((s) => s.eraseMarked.includes(node.id));
   // Glow halo takes the node's stroke color; transparent strokes fall back
   // to the accent so the effect is never invisible.
   const glowColor =
@@ -173,23 +190,28 @@ export function NodeView({
       onPointerLeave={() => setHovered(false)}
       style={{ cursor: dragging ? "grabbing" : "grab" }}
     >
-      {/* forgiving hover/drag halo (transparent but hit-testable) */}
-      <rect
-        data-editor-only="1"
-        x={node.x - HALO}
-        y={node.y - HALO}
-        width={node.w + HALO * 2}
-        height={node.h + HALO * 2}
-        fill="transparent"
-        stroke="none"
-      />
+      {/* forgiving hover halo (transparent but hit-testable) — ARROW mode
+          only, where it keeps the border ports reachable. In select mode it
+          would swallow a marquee started next to a shape (worst on borderless
+          text labels) and grab the shape instead. */}
+      {arrowMode && (
+        <rect
+          data-editor-only="1"
+          x={node.x - HALO}
+          y={node.y - HALO}
+          width={node.w + HALO * 2}
+          height={node.h + HALO * 2}
+          fill="transparent"
+          stroke="none"
+        />
+      )}
       {/* Idle animation wraps shape+text so they move as one; the halo,
           selection box and ports stay OUTSIDE the group so editor chrome
           never pulses/wobbles. transform-box/origin come from the CSS class;
           speed is inline (beats the class default); data-* attrs let the GIF
           exporter bake the exact same motion deterministically. */}
       <g
-        opacity={nodeOpacity}
+        opacity={erasing ? 0.25 : nodeOpacity}
         // Rotation wraps shape+text; the selection box, grips and rotate
         // handle carry the SAME transform (drawn outside this group so the
         // idle animation never wobbles them). Halo and ports stay
@@ -213,7 +235,7 @@ export function NodeView({
         {/* Hand-drawn look: a shared roughen filter jitters the shape edges;
             the text switches to a handwriting font. Filter id is global +
             idempotent (see SketchDefs, rendered once by DiagramLayer). */}
-        <g filter={node.sketch ? "url(#noddle-sketch)" : undefined}>
+        <g filter={node.sketch && node.kind !== "icon" ? "url(#noddle-sketch)" : undefined}>
           {shapeElement(node)}
         </g>
         <text
@@ -222,7 +244,9 @@ export function NodeView({
           textAnchor={node.kind === "icon" ? "middle" : textAnchor}
           dominantBaseline="central"
           fontSize={node.fontSize ?? 14}
-          fontWeight={node.bold ? 700 : undefined}
+          // Icon captions default to semibold (thin 400 read weak under a
+          // saturated tile); an explicit bold/normal pick still wins.
+          fontWeight={node.bold ? 700 : node.kind === "icon" && node.bold === undefined ? 600 : undefined}
           fontStyle={node.italic ? "italic" : undefined}
           textDecoration={node.underline ? "underline" : undefined}
           fill={node.textColor ?? LABEL_INK}
@@ -246,30 +270,62 @@ export function NodeView({
       {/* Connect affordance FIRST (below the selection chrome) — its full-node
           overlay must not sit on top of the resize grips or it steals their
           pointerdown and the shape can't be scaled. */}
-      {(hovered || selected) && (
+      {connectMode && (hovered || selected) && (
         <ConnectionPorts node={node} selected={selected} onPreviewChange={onPreviewChange} />
       )}
-      {selected && (
-        <rect
+      {/* Part of a MULTI-selection: a faint outline so you can tell which
+          shapes are in it (grips belong to the single SelectionFrame). */}
+      {/* pen strokes: the selection HUGS the ink (no box) — solo or multi */}
+      {(inMulti || selected) && !arrowMode && node.kind === "freedraw" && (
+        <path
           data-editor-only="1"
-          x={node.x - 3}
-          y={node.y - 3}
-          width={node.w + 6}
-          height={node.h + 6}
+          d={freedrawPath(node.points, node.x, node.y, node.w, node.h)}
           transform={chromeRotate(node)}
           fill="none"
           stroke={SELECT_STROKE}
-          strokeWidth={1.5}
-          strokeDasharray="4 3"
+          strokeOpacity={selected ? 0.45 : 0.32}
+          strokeWidth={(node.pen?.type === "highlighter" ? node.strokeWidth * 3 : node.strokeWidth) + 7}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ pointerEvents: "none" }}
+        />
+      )}
+      {inMulti && !arrowMode && node.kind !== "freedraw" && (
+        <rect
+          data-editor-only="1"
+          x={node.x - 4}
+          y={node.y - 4}
+          width={node.w + 8}
+          height={node.h + 8}
+          transform={chromeRotate(node)}
+          rx={4}
+          fill="none"
+          stroke={SELECT_STROKE}
+          strokeOpacity={0.55}
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+          style={{ pointerEvents: "none" }}
+        />
+      )}
+      {/* Excalidraw selection: a thin SOLID outline + 4 corner grips. The arrow
+          tool shows none of it (its only cue is the glow). */}
+      {selected && !arrowMode && node.kind !== "freedraw" && (
+        <rect
+          data-editor-only="1"
+          x={node.x - 5}
+          y={node.y - 5}
+          width={node.w + 10}
+          height={node.h + 10}
+          transform={chromeRotate(node)}
+          fill="none"
+          stroke={SELECT_STROKE}
+          strokeWidth={1}
           vectorEffect="non-scaling-stroke"
           style={{ pointerEvents: "none" }}
         />
       )}
       {/* Resize grips LAST so they sit above the connect overlay. */}
-      {selected && <ResizeHandles node={node} />}
-      {/* draw.io-style directional arrows: click → same-kind connected shape,
-          hover → mini shape picker. Solo selection only. */}
-      {soloSelected && quickAddOn && <DirectionalArrows node={node} />}
+      {selected && !arrowMode && <ResizeHandles node={node} />}
     </g>
   );
 }
@@ -439,7 +495,7 @@ export function RotateHandle({ node }: { node: DiagramNode }) {
 
 function ResizeHandles({ node }: { node: DiagramNode }) {
   const z = useEditorStore((s) => s.cam.z) || 1;
-  const s = 9 / z; // constant ~9px screen handle
+  const s = 8 / z; // constant ~8px screen handle
   const min = 20;
 
   const startResize =
@@ -497,23 +553,27 @@ function ResizeHandles({ node }: { node: DiagramNode }) {
       {HANDLE_ROLES.map((r) => {
         const hx = node.x + node.w * r.fx;
         const hy = node.y + node.h * r.fy;
+        // Excalidraw shows only the 4 CORNER grips; the side grips stay as
+        // invisible (wider) hit targets so edges still drag-resize.
+        const side = r.fx === 0.5 || r.fy === 0.5;
+        const hw = side ? (r.fx === 0.5 ? Math.max(s, node.w - s * 2) : s) : s;
+        const hh = side ? (r.fy === 0.5 ? Math.max(s, node.h - s * 2) : s) : s;
         return (
           <rect
             key={r.id}
             data-handle={r.id}
-            x={hx - s / 2}
-            y={hy - s / 2}
-            width={s}
-            height={s}
-            rx={s * 0.22}
-            fill="#fff"
-            stroke={SELECT_STROKE}
-            strokeWidth={1.5}
+            x={hx - hw / 2}
+            y={hy - hh / 2}
+            width={hw}
+            height={hh}
+            rx={side ? 0 : s * 0.25}
+            fill={side ? "transparent" : "#fff"}
+            stroke={side ? "none" : SELECT_STROKE}
+            strokeWidth={1}
             vectorEffect="non-scaling-stroke"
             style={{ cursor: r.cur }}
             onPointerDown={startResize(r)}
           >
-            {/* squares resize; the circles just outside draw arrows */}
             <title>Drag to resize</title>
           </rect>
         );

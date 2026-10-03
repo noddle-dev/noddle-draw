@@ -10,11 +10,39 @@
  * Stroke width → strokeWidth, Stroke style → strokeDash, Sloppiness → sketch,
  * Edges → cornerRadius, Opacity → opacity (1 ⇒ field removed).
  */
-import type { DiagramNode } from "../../editor-core/diagram";
+import type { DiagramEdge, DiagramNode, PenBrush } from "../../editor-core/diagram";
 import { useDiagramStore } from "../../state/diagramStore";
-import { useEditorStore } from "../../state/editorStore";
+import { arrangeSelection, flipSelection } from "../../state/arrange";
+import { DEFAULT_BRUSH, useEditorStore } from "../../state/editorStore";
 
 const STROKES = ["#2d3142", "#dc2626", "#16a34a", "#2563eb", "#eb6c36"];
+/** A #rrggbb for <input type=color> (it rejects names / rgba / "transparent"). */
+function toHex(v: string | undefined): string {
+  return v && /^#[0-9a-f]{6}$/i.test(v) ? v : "#000000";
+}
+
+/**
+ * The last swatch of every colour row: a rainbow well that opens the system
+ * colour picker. When the current value is off-palette it shows THAT colour
+ * and reads as selected, so a custom pick never looks unselected.
+ */
+function ColorWell({ value, presets, label, onPick }: {
+  value: string | undefined;
+  presets: string[];
+  label: string;
+  onPick: (c: string) => void;
+}) {
+  const v = (value ?? "").toLowerCase();
+  const custom = !!v && v !== "transparent" && v !== "none" && !presets.some((p) => p.toLowerCase() === v);
+  return (
+    <label className={`ds-swatch ds-well${custom ? " active custom" : ""}`} title={`${label}: custom colour`}
+      style={custom ? { background: value } : undefined}>
+      <input type="color" value={toHex(value)} aria-label={`${label} custom colour`}
+        onChange={(e) => onPick(e.target.value)} />
+    </label>
+  );
+}
+
 const FILLS: { v: string; label: string }[] = [
   { v: "transparent", label: "Transparent" },
   { v: "#ffffff", label: "White" },
@@ -27,6 +55,11 @@ const FILLS: { v: string; label: string }[] = [
 export function DrawStylePanel() {
   const style = useEditorStore((s) => s.drawStyle);
   const setDrawStyle = useEditorStore((s) => s.setDrawStyle);
+  const tool = useEditorStore((s) => s.tool);
+  const allSelFreedraw = useDiagramStore((s) => {
+    const ns = s.diagramSelection.map((id) => s.nodes[id]).filter(Boolean);
+    return ns.length > 0 && ns.every((n) => n.kind === "freedraw");
+  });
   // With a selection, the panel MIRRORS the first selected node (Excalidraw)
   // and every control live-patches the whole selection; without one it edits
   // the pending draw style.
@@ -58,6 +91,10 @@ export function DrawStylePanel() {
 
   if (!firstSel && hasSelEdge) {
     return <EdgeQuickPanel />;
+  }
+  // Pen armed, or only pen strokes selected → the pen's own short panel.
+  if ((tool === "pen" && !firstSel) || (firstSel && allSelFreedraw)) {
+    return <PenPanel />;
   }
 
   const src: Partial<DiagramNode> = firstSel ?? style;
@@ -223,28 +260,16 @@ export function DrawStylePanel() {
 
           <div className="ds-label">Layers</div>
           <div className="ds-row">
-            <button
-              className="ds-opt"
-              title="Send to back"
-              aria-label="Send to back"
-              onClick={() => {
-                const ds = useDiagramStore.getState();
-                ds.sendNodesToBack(ds.diagramSelection.filter((id) => ds.nodes[id]));
-              }}
-            >
-              ⤓
-            </button>
-            <button
-              className="ds-opt"
-              title="Bring to front"
-              aria-label="Bring to front"
-              onClick={() => {
-                const ds = useDiagramStore.getState();
-                ds.bringNodesToFront(ds.diagramSelection.filter((id) => ds.nodes[id]));
-              }}
-            >
-              ⤒
-            </button>
+            {([
+              ["back", "Send to back (⌘⇧[)", "M8 2.5 V10 M5 7 L8 10 L11 7 M3 13.5 H13"],
+              ["backward", "Send backward (⌘[)", "M8 3 V12 M5 9 L8 12 L11 9"],
+              ["forward", "Bring forward (⌘])", "M8 13 V4 M5 7 L8 4 L11 7"],
+              ["front", "Bring to front (⌘⇧])", "M8 13.5 V6 M5 9 L8 6 L11 9 M3 2.5 H13"],
+            ] as const).map(([dir, title, d]) => (
+              <button key={dir} className="ds-opt" title={title} aria-label={title} onClick={() => arrangeSelection(dir)}>
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+              </button>
+            ))}
           </div>
           <div className="ds-label">Actions</div>
           <div className="ds-row">
@@ -256,12 +281,147 @@ export function DrawStylePanel() {
             >
               ⧉
             </button>
+            <button className="ds-opt" title="Flip horizontal (⇧H)" aria-label="Flip horizontal" onClick={() => flipSelection("h")}>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2 V14 M6 4.5 L2.5 11.5 H6 Z M10 4.5 L13.5 11.5 H10 Z" /></svg>
+            </button>
+            <button className="ds-opt" title="Flip vertical (⇧V)" aria-label="Flip vertical" onClick={() => flipSelection("v")}>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 8 H14 M4.5 6 L11.5 2.5 V6 Z M4.5 10 L11.5 13.5 V10 Z" /></svg>
+            </button>
             <button
               className="ds-opt"
               title="Delete"
               aria-label="Delete selection"
               onClick={() => useDiagramStore.getState().deleteSelectedDiagram()}
             >
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M2.5 4.5 h11 M6.5 2.5 h3 M4 4.5 l.8 9 a1 1 0 0 0 1 .9 h4.4 a1 1 0 0 0 1-.9 l.8-9 M6.5 7 v4.5 M9.5 7 v4.5" />
+              </svg>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Pen widths (px) — finer steps than shape borders, ink needs them. */
+const PEN_WIDTHS: { v: number; label: string }[] = [
+  { v: 1, label: "Fine" },
+  { v: 2, label: "Medium" },
+  { v: 4, label: "Bold" },
+  { v: 7, label: "Marker" },
+];
+
+/**
+ * Pen panel (Excalidraw freedraw): the three properties a basic pen has —
+ * colour, thickness, opacity. With strokes selected it edits them live AND
+ * becomes the pen's next style; with the pen armed it only sets the style.
+ */
+function PenPanel() {
+  const pen = useEditorStore((s) => s.penStyle);
+  const setPenStyle = useEditorStore((s) => s.setPenStyle);
+  const first = useDiagramStore((s) => {
+    const id = s.diagramSelection.find((x) => s.nodes[x]?.kind === "freedraw");
+    return id ? s.nodes[id] : null;
+  });
+  const src = first
+    ? { stroke: first.stroke, strokeWidth: first.strokeWidth, opacity: first.opacity, brush: { ...DEFAULT_BRUSH, ...first.pen } }
+    : { ...pen, brush: { ...DEFAULT_BRUSH, ...pen.brush } };
+  const apply = (patch: Partial<DiagramNode>) => {
+    setPenStyle(patch as never);
+    const ds = useDiagramStore.getState();
+    ds.diagramSelection.filter((id) => ds.nodes[id]?.kind === "freedraw").forEach((id) => ds.updateNode(id, patch));
+  };
+  /** Brush settings merge into BOTH the pen style and every selected stroke. */
+  const applyBrush = (patch: PenBrush) => {
+    const brush = { ...src.brush, ...patch };
+    setPenStyle({ brush });
+    const ds = useDiagramStore.getState();
+    ds.diagramSelection
+      .filter((id) => ds.nodes[id]?.kind === "freedraw")
+      .forEach((id) => ds.updateNode(id, { pen: { ...DEFAULT_BRUSH, ...ds.nodes[id].pen, ...patch } }));
+  };
+  const opacity = src.opacity ?? 1;
+  const b = src.brush;
+  return (
+    <div className="draw-style" role="group" aria-label="Pen style">
+      {/* Photoshop-basic brush controls: type, pressure (thick-thin) + taper,
+          smoothing, hardness — plus colour / size / opacity below. */}
+      <div className="ds-label">Brush</div>
+      <div className="ds-row">
+        {(["pen", "marker", "highlighter"] as const).map((t) => (
+          <button key={t} className={`ds-opt ds-opt-wide${(b.type ?? "pen") === t ? " active" : ""}`}
+            aria-label={`Brush ${t}`} title={{ pen: "Pen — ink that thins with speed", marker: "Marker — even, flat stroke", highlighter: "Highlighter — wide, see-through" }[t]}
+            onClick={() => applyBrush({ type: t })}>
+            {t === "pen" ? "Pen" : t === "marker" ? "Marker" : "Highlight"}
+          </button>
+        ))}
+      </div>
+      <div className="ds-label">Stroke</div>
+      <div className="ds-row">
+        {STROKES.map((c) => (
+          <button key={c} className={`ds-swatch${src.stroke === c ? " active" : ""}`} style={{ background: c }}
+            title={c} aria-label={`Pen colour ${c}`} onClick={() => apply({ stroke: c })} />
+        ))}
+        <ColorWell value={src.stroke} presets={STROKES} label="Pen" onPick={(c) => apply({ stroke: c })} />
+      </div>
+      <div className="ds-label">Stroke width</div>
+      <div className="ds-row">
+        {PEN_WIDTHS.map((w) => (
+          <button key={w.v} className={`ds-opt${src.strokeWidth === w.v ? " active" : ""}`} title={`${w.label} (${w.v}px)`}
+            aria-label={`Pen width ${w.label}`} onClick={() => apply({ strokeWidth: w.v })}>
+            <svg viewBox="0 0 24 12" width="22" height="12" aria-hidden="true">
+              <path d="M2 8 C7 2, 12 11, 22 4" fill="none" stroke="currentColor" strokeWidth={Math.min(6, w.v)} strokeLinecap="round" />
+            </svg>
+          </button>
+        ))}
+      </div>
+      {(b.type ?? "pen") === "pen" && (
+        <>
+          <div className="ds-label">
+            Pressure <span className="ds-val">{Math.round((b.thinning ?? 0) * 100)}%</span>
+          </div>
+          <div className="ds-row" style={{ alignItems: "center" }}>
+            <input className="ds-slider" style={{ flex: 1 }} type="range" min={0} max={100} step={5}
+              value={Math.round((b.thinning ?? 0) * 100)} aria-label="Pen pressure (thick-thin)"
+              onChange={(e) => applyBrush({ thinning: Number(e.target.value) / 100 })} />
+            <button className={`ds-opt${b.taper ? " active" : ""}`} title="Taper both ends" aria-label="Taper ends"
+              aria-pressed={!!b.taper} onClick={() => applyBrush({ taper: !b.taper })}>
+              <svg viewBox="0 0 24 12" width="20" height="12" aria-hidden="true">
+                <path d="M2 6 Q12 0 22 6 Q12 12 2 6 Z" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
+        </>
+      )}
+      <div className="ds-label">
+        Smoothing <span className="ds-val">{Math.round((b.smoothing ?? 0) * 100)}%</span>
+      </div>
+      <input className="ds-slider" type="range" min={0} max={100} step={5}
+        value={Math.round((b.smoothing ?? 0) * 100)} aria-label="Pen smoothing"
+        onChange={(e) => applyBrush({ smoothing: Number(e.target.value) / 100 })} />
+      <div className="ds-label">Hardness</div>
+      <div className="ds-row">
+        {([[0, "Hard"], [0.4, "Medium"], [0.8, "Soft"]] as const).map(([v, label]) => (
+          <button key={label} className={`ds-opt ds-opt-wide${(b.softness ?? 0) === v ? " active" : ""}`}
+            aria-label={`Hardness ${label}`} onClick={() => applyBrush({ softness: v })}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="ds-label">Opacity</div>
+      <input className="ds-slider" type="range" min={10} max={100} step={10} value={Math.round(opacity * 100)}
+        aria-label="Pen opacity"
+        onChange={(e) => {
+          const v = Number(e.target.value) / 100;
+          apply({ opacity: v >= 1 ? undefined : v });
+        }} />
+      {first && (
+        <>
+          <div className="ds-label">Actions</div>
+          <div className="ds-row">
+            <button className="ds-opt" title="Delete" aria-label="Delete selection"
+              onClick={() => useDiagramStore.getState().deleteSelectedDiagram()}>
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <path d="M2.5 4.5 h11 M6.5 2.5 h3 M4 4.5 l.8 9 a1 1 0 0 0 1 .9 h4.4 a1 1 0 0 0 1-.9 l.8-9 M6.5 7 v4.5 M9.5 7 v4.5" />
               </svg>
@@ -282,7 +442,9 @@ function EdgeQuickPanel() {
   });
   if (!firstEdge) return null;
 
-  const applyEdge = (patch: Record<string, unknown>) => {
+  const applyEdge = (patch: Partial<DiagramEdge>) => {
+    // The next connector is born with this style (Excalidraw remembers it).
+    useEditorStore.getState().setEdgeStyle(patch);
     const ds = useDiagramStore.getState();
     ds.diagramSelection
       .filter((id) => ds.edges[id])
@@ -343,7 +505,7 @@ function EdgeQuickPanel() {
 
       <div className="ds-label">Line</div>
       <div className="ds-row">
-        {([["straight", "Straight"], ["elbow", "Elbow"]] as const).map(([v, label]) => (
+        {([["straight", "Straight"], ["curved", "Curved"], ["elbow", "Elbow"]] as const).map(([v, label]) => (
           <button
             key={v}
             className={`ds-opt${firstEdge.routing === v ? " active" : ""}`}

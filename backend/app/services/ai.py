@@ -1412,6 +1412,26 @@ class AIService:
                 node["imageHref"] = href
             if isinstance(n.get("groupId"), str):
                 node["groupId"] = n["groupId"][:64]
+            pts = n.get("points")
+            if isinstance(pts, list) and 4 <= len(pts) <= 4000 and len(pts) % 2 == 0:
+                # Pen stroke: flat [x0,y0,x1,y1,…] normalised to the node box.
+                vals = [p for p in pts if isinstance(p, (int, float)) and not isinstance(p, bool)]
+                if len(vals) == len(pts):
+                    node["points"] = [min(1.0, max(0.0, float(p))) for p in vals]
+            pen = n.get("pen")
+            if isinstance(pen, dict):
+                # Pen brush (render-time settings) — validated key by key.
+                brush: dict = {}
+                if pen.get("type") in ("pen", "marker", "highlighter"):
+                    brush["type"] = pen["type"]
+                for k in ("thinning", "smoothing", "softness"):
+                    v = pen.get(k)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        brush[k] = min(1.0, max(0.0, float(v)))
+                if isinstance(pen.get("taper"), bool):
+                    brush["taper"] = pen["taper"]
+                if brush:
+                    node["pen"] = brush
             z = opt_num(n.get("z"))
             if z is not None:
                 node["z"] = z
@@ -1461,7 +1481,9 @@ class AIService:
                 "id": eid,
                 "source": src,
                 "target": tgt,
-                "routing": e.get("routing") if e.get("routing") in ("straight", "elbow") else "elbow",
+                # "curved" must survive AI edits — dropping it would silently
+                # re-route a user's curved arrows to elbow.
+                "routing": e.get("routing") if e.get("routing") in ("straight", "elbow", "curved") else "elbow",
                 "stroke": str(e.get("stroke", "#475569"))[:32],
                 "strokeWidth": num(e.get("strokeWidth"), 2),
                 "endArrow": bool(e.get("endArrow", True)),

@@ -88,7 +88,9 @@ export type NodeKind =
   | "icon"
   // uploaded raster image (data URL in `imageHref`) behaving like any shape:
   // rect perimeter, ports, arrows, resize — see features/editor/pasteImage.ts
-  | "image";
+  | "image"
+  // pen stroke (Excalidraw freedraw): `points` traced inside the node box
+  | "freedraw";
 
 /**
  * Animation speed multiplier shared by edges and nodes. Cycle durations are
@@ -200,6 +202,15 @@ export interface DiagramNode {
    */
   groupId?: string;
   /**
+   * For kind "freedraw": the pen stroke as a FLAT [x0,y0,x1,y1,…] list
+   * normalised to the node box (0..1), so moving/resizing the node scales the
+   * ink like any shape. Absent on every other kind.
+   */
+  points?: number[];
+  /** For kind "freedraw": brush settings (type / pressure / smoothing /
+   * taper / softness) — render-time only, the points stay as drawn. */
+  pen?: PenBrush;
+  /**
    * Unified paint order across BOTH nodes and edges (higher → on top). Assigned
    * a monotonic value at creation so a freshly added shape/arrow lands on top
    * of everything. Absent → legacy object: the renderer places legacy edges
@@ -220,7 +231,8 @@ export type Attachment =
   | { kind: "floating"; nodeId: string }
   | { kind: "free"; point: Vec };
 
-export type Routing = "straight" | "elbow";
+/** straight = Excalidraw "sharp", curved = a smooth cubic, elbow = orthogonal. */
+export type Routing = "straight" | "elbow" | "curved";
 
 /**
  * An edge endpoint decoration:
@@ -299,4 +311,18 @@ export interface DiagramEdge {
    * nodes); a newly drawn arrow is z-stamped so it sits on top of shapes.
    */
   z?: number;
+}
+
+/** Brush settings carried on a freedraw node (`node.pen`). All optional. */
+export interface PenBrush {
+  /** pen = ink (default) · marker = flat, even · highlighter = wide, translucent, multiply. */
+  type?: "pen" | "marker" | "highlighter";
+  /** 0..1 — how much the width drops where the hand moved fast (thick-thin pressure). */
+  thinning?: number;
+  /** 0..1 — moving-average smoothing applied at render (data untouched). */
+  smoothing?: number;
+  /** Narrow both ends of the stroke (calligraphic). */
+  taper?: boolean;
+  /** 0..1 — edge softness (0 = hard brush). */
+  softness?: number;
 }
