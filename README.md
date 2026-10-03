@@ -4,6 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Live](https://img.shields.io/badge/demo-draw.noddle.dev-7c3aed)](https://draw.noddle.dev)
 
+![noddle draw: a migration architecture board with handwritten annotations, a speech-bubble note, the style panel and two collaborators' cursors](docs/media/hero.png)
+
 **Open-source anonymous diagram board** — structured shapes and smart
 connectors like Lucidchart, instant no-login drawing and link-sharing like
 Excalidraw, plus an AI co-editor that edits the board with you (bring your
@@ -14,13 +16,29 @@ own API key).
 
 Part of the [**Noddle**](https://github.com/noddle-dev) open-source suite.
 
+## See it in action
+
+<table>
+<tr>
+<td width="50%"><b>Live collaboration</b>: guests share a link, see each other's cursors, and leave comment threads pinned to shapes.<br><img src="docs/media/collab.gif" alt="Two anonymous guests co-edit a board: one draws a box and an arrow and leaves a comment, the other replies"></td>
+<td width="50%"><b>Pen, laser and eraser</b>: circle things with the pen, point with the laser (<code>K</code>), and sweep strokes away with the eraser.<br><img src="docs/media/tools.gif" alt="Drawing with the pen, pointing with the laser trail, erasing a stroke"></td>
+</tr>
+<tr>
+<td><b>Library</b> (<code>L</code>): drag ready-made wireframe, diagram and cloud pieces onto the board.<br><img src="docs/media/library.gif" alt="Dragging a browser frame, search bar, buttons and AWS icons from the Library"></td>
+<td><b>Animated connectors</b>: dots, dash, beam or pulse flows, picked from the style panel.<br><img src="docs/media/animated.gif" alt="Picking a dots, then beam, flow animation for an arrow on a system diagram"></td>
+</tr>
+<tr>
+<td><b>AI-Noddle chat (BYOK)</b>: describe a change, and the board is edited for you. Your own key stays in your browser.<br><img src="docs/media/ai-chat.gif" alt="The AI-Noddle panel with starter prompts and the Add AI key dialog with free Gemini and Groq presets"></td>
+<td><b>Shortcuts, zen and present</b>: press <code>?</code> for every shortcut, <code>⌥Z</code> for zen mode, and use Present to show pages as slides.<br><img src="docs/media/present.gif" alt="Keyboard shortcuts sheet, zen mode, then Present mode stepping through three pages"></td>
+</tr>
+</table>
+
 ## Draw together — the link is the invite
 
 Share the board URL and people are co-editing instantly: shared cursors,
-presence, live state sync over WebSocket. No accounts anywhere — your identity
-is auto-generated in your browser (rename it in the Share dialog).
-
-![Live collaboration — two anonymous guests co-editing](docs/media/collab.gif)
+presence, live state sync over WebSocket, and comment threads pinned to
+shapes. No accounts anywhere — your identity is auto-generated in your
+browser (rename it in the Share dialog).
 
 ## Real diagramming, with living connectors
 
@@ -28,11 +46,10 @@ is auto-generated in your browser (rename it in the Share dialog).
 (AWS · Azure · GCP · Databricks · network), sticky notes, standalone text,
 images, containers, multi-page boards, 28 starter templates and your own saved
 "My shapes" — plus a hand-drawn sketch mode and idle shape animations
-(pulse/glow/breathe/wobble). Connectors are orthogonal and auto-routed
-(A\* elbow routing with draggable waypoints) and can **animate**: dash, dots,
-beam or pulse flows to show data moving through your system.
-
-![Animated edges — beam flows on a system diagram](docs/media/animated.gif)
+(pulse/glow/breathe/wobble). Connectors are sharp, curved or elbow
+(A\* auto-routing with draggable waypoints and a bend handle), snap onto
+shapes as you draw them, and can **animate**: dash, dots, beam or pulse flows
+to show data moving through your system.
 
 ## AI co-editor — your key, your browser (BYOK)
 
@@ -41,8 +58,6 @@ tier"*, image→diagram conversion (whiteboard photo → editable shapes),
 text/Mermaid→diagram. Your key stays in **your browser's localStorage** and
 rides each request as a header — the server proxies the call and never stores
 it. A **Test** button proves the key works before you save it.
-
-![BYOK — add and test your own AI key](docs/media/byok.gif)
 
 ### Bring your own key
 
