@@ -169,6 +169,9 @@ interface EditorState {
   /** Eraser sweep: objects marked for deletion (faded until pointer up). */
   eraseMarked: string[];
   setEraseMarked: (ids: string[]) => void;
+  /** Smart alignment guides shown while dragging shapes (content coords). */
+  alignGuides: { x: number[]; y: number[] };
+  setAlignGuides: (g: { x: number[]; y: number[] }) => void;
   /** Style every NEW connector is born with — remembered from the last time
    * the user styled one (quick panel), persisted per browser. */
   edgeStyle: Partial<DiagramEdge>;
@@ -329,6 +332,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       /* private mode */
     }
     set({ penStyle: next });
+  },
+  alignGuides: { x: [], y: [] },
+  setAlignGuides(g) {
+    const cur = get().alignGuides;
+    if (cur.x.join() === g.x.join() && cur.y.join() === g.y.join()) return; // no re-render churn
+    set({ alignGuides: g });
   },
   eraseMarked: [],
   setEraseMarked(ids) {
