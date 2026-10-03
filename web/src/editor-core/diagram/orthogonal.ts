@@ -245,12 +245,47 @@ interface GridNode {
  * including both true endpoints. Falls back to a simple dongle Z-route when
  * A* finds no path (e.g. overlapping shapes).
  */
+/** Below this offset (content px) two facing endpoints are treated as aligned:
+ * the route snaps to ONE straight segment instead of a tiny dog-leg jog (the
+ * "almost lined up" case is impossible to fix by hand-dragging a shape). */
+export const MICRO_JOG = 10;
+
+/**
+ * Straighten a near-aligned connection between two FACING sides (S→N, N→S,
+ * E→W, W→E): slide one endpoint along its shape's edge (staying ON the edge,
+ * 2px in from the corners) so both ends share x (or y). Returns null when it
+ * doesn't apply — offset too big, sides not facing, or no room on either edge.
+ */
+export function straightenMicroJog(
+  start: { point: Vec; side: Side; node?: DiagramNode | null },
+  end: { point: Vec; side: Side; node?: DiagramNode | null },
+): Vec[] | null {
+  const s = start.point, e = end.point;
+  const vertical = (start.side === "S" && end.side === "N" && e.y > s.y) || (start.side === "N" && end.side === "S" && e.y < s.y);
+  const horizontal = (start.side === "E" && end.side === "W" && e.x > s.x) || (start.side === "W" && end.side === "E" && e.x < s.x);
+  if (!vertical && !horizontal) return null;
+  const off = vertical ? Math.abs(s.x - e.x) : Math.abs(s.y - e.y);
+  if (off < 0.5 || off >= MICRO_JOG) return null;
+  const within = (v: number, n: DiagramNode | null | undefined, axis: "x" | "y") =>
+    !!n && (axis === "x" ? v >= n.x + 2 && v <= n.x + n.w - 2 : v >= n.y + 2 && v <= n.y + n.h - 2);
+  if (vertical) {
+    if (within(s.x, end.node, "x")) return [s, { x: s.x, y: e.y }];
+    if (within(e.x, start.node, "x")) return [{ x: e.x, y: s.y }, e];
+  } else {
+    if (within(s.y, end.node, "y")) return [s, { x: e.x, y: s.y }];
+    if (within(e.y, start.node, "y")) return [{ x: s.x, y: e.y }, e];
+  }
+  return null;
+}
+
 export function routeOrthogonal(
   start: { point: Vec; side: Side; node?: DiagramNode | null },
   end: { point: Vec; side: Side; node?: DiagramNode | null },
   obstacles: DiagramNode[],
   pad: number = ROUTE_PAD,
 ): Vec[] {
+  const straight = straightenMicroJog(start, end);
+  if (straight) return straight;
   // Dongles clear each endpoint's bounding box so slanted/curved-edge exits
   // (diamond/ellipse) don't hug the shape.
   const sd = clearingDongle(start.point, start.side, pad, start.node ?? undefined);

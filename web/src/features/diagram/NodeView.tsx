@@ -113,18 +113,55 @@ export function NodeView({
       })
       .filter(Boolean) as { id: string; x: number; y: number }[];
 
+    // Smart alignment (Excalidraw/Figma): the moving selection's centre and
+    // edges snap to other shapes' centres/edges within a few SCREEN px, with a
+    // guide line — so "almost lined up" boxes (and the arrows between them)
+    // become exactly straight. Alignment beats the grid on that axis.
+    const sizes = new Map(origs.map((o) => {
+      const n = useDiagramStore.getState().nodes[o.id];
+      return [o.id, { w: n?.w ?? 0, h: n?.h ?? 0 }];
+    }));
+    const box0 = origs.reduce(
+      (b, o) => {
+        const z = sizes.get(o.id)!;
+        return { x0: Math.min(b.x0, o.x), y0: Math.min(b.y0, o.y), x1: Math.max(b.x1, o.x + z.w), y1: Math.max(b.y1, o.y + z.h) };
+      },
+      { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity },
+    );
+    const moving = new Set(origs.map((o) => o.id));
+    const targets = Object.values(useDiagramStore.getState().nodes).filter(
+      (n) => !moving.has(n.id) && n.kind !== "freedraw" && n.w > 0 && n.h > 0,
+    );
+    const tx = targets.flatMap((n) => [n.x, n.x + n.w / 2, n.x + n.w]);
+    const ty = targets.flatMap((n) => [n.y, n.y + n.h / 2, n.y + n.h]);
+    const best = (refs: number[], lines: number[], tol: number): { d: number; at: number } | null => {
+      let out: { d: number; at: number } | null = null;
+      for (const r of refs) for (const l of lines) {
+        const d = l - r;
+        if (Math.abs(d) <= tol && (!out || Math.abs(d) < Math.abs(out.d))) out = { d, at: l };
+      }
+      return out;
+    };
+
     const move = (ev: PointerEvent) => {
       const p = screenToContent(content, ev.clientX, ev.clientY);
-      const dx = p.x - start.x;
-      const dy = p.y - start.y;
+      let dx = p.x - start.x;
+      let dy = p.y - start.y;
       const snap = useAppStore.getState().snapOn;
       const store = useDiagramStore.getState();
+      const tol = 6 / (useEditorStore.getState().cam.z || 1);
+      const bx = { x0: box0.x0 + dx, x1: box0.x1 + dx, y0: box0.y0 + dy, y1: box0.y1 + dy };
+      const ax = ev.altKey ? null : best([bx.x0, (bx.x0 + bx.x1) / 2, bx.x1], tx, tol);
+      const ay = ev.altKey ? null : best([bx.y0, (bx.y0 + bx.y1) / 2, bx.y1], ty, tol);
+      if (ax) dx += ax.d;
+      if (ay) dy += ay.d;
+      useEditorStore.getState().setAlignGuides({ x: ax ? [ax.at] : [], y: ay ? [ay.at] : [] });
       for (const o of origs) {
         let nx = o.x + dx;
         let ny = o.y + dy;
         if (snap) {
-          nx = Math.round(nx / SNAP) * SNAP;
-          ny = Math.round(ny / SNAP) * SNAP;
+          if (!ax) nx = Math.round(nx / SNAP) * SNAP;
+          if (!ay) ny = Math.round(ny / SNAP) * SNAP;
         }
         const cur = store.nodes[o.id];
         if (cur && (cur.x !== nx || cur.y !== ny)) {
@@ -135,6 +172,7 @@ export function NodeView({
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      useEditorStore.getState().setAlignGuides({ x: [], y: [] });
       useDiagramStore.getState().setDraggingId(null);
     };
     window.addEventListener("pointermove", move);

@@ -232,6 +232,7 @@ export function DiagramLayer() {
       {/* target highlight while connecting */}
       {/* (port snapping still works — Excalidraw shows no dot for it) */}
       {hlNode && <BindGlow node={hlNode} strong />}
+      <AlignGuides />
 
       {/* highlight the node an endpoint is being dragged onto */}
       {endpointHoverNode && <BindGlow node={endpointHoverNode} strong />}
@@ -250,6 +251,23 @@ export function DiagramLayer() {
       {/* rotate grip for the selected node — TOP-most so no edge hit-path
           can steal its pointerdown. */}
       {selNode && <RotateHandle node={selNode} />}
+    </g>
+  );
+}
+
+/** Smart alignment guides while a shape is dragged (editorStore.alignGuides). */
+function AlignGuides() {
+  const g = useEditorStore((s) => s.alignGuides);
+  if (!g.x.length && !g.y.length) return null;
+  const FAR = 100000;
+  return (
+    <g data-editor-only="1" pointerEvents="none">
+      {g.x.map((x) => (
+        <line key={`gx${x}`} x1={x} y1={-FAR} x2={x} y2={FAR} stroke="#e8467c" strokeWidth={1} vectorEffect="non-scaling-stroke" strokeDasharray="4 3" />
+      ))}
+      {g.y.map((y) => (
+        <line key={`gy${y}`} x1={-FAR} y1={y} x2={FAR} y2={y} stroke="#e8467c" strokeWidth={1} vectorEffect="non-scaling-stroke" strokeDasharray="4 3" />
+      ))}
     </g>
   );
 }
