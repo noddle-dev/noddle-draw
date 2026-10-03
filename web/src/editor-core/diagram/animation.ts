@@ -33,6 +33,15 @@ export function dotsForLength(length: number): number {
   return Math.max(4, Math.min(40, Math.round(length / DOTS_SPACING)));
 }
 
+/** Dots travel at a CONSTANT speed (2026-10-03): each packet advances one
+ * spacing per DOTS_STEP_MS, so a long edge no longer races (the old fixed
+ * 1.2s whole-path lap made a 400px edge run ~330px/s). The visible period is
+ * one step (0.3s at 1×), which divides 1.2s — GIF loops stay seamless. */
+export const DOTS_STEP_MS = 300;
+export function dotsCycleMs(length: number, speed: number | undefined): number {
+  return (dotsForLength(length) * DOTS_STEP_MS) / (speed && speed > 0 ? speed : 1);
+}
+
 /** Animation speed is a continuous multiplier now (a 1–100 UI slider maps to
  * value/50, so 50 = 1×). Clamp to a sane, non-frozen range. */
 export const SPEED_SLIDER_MAX = 100;

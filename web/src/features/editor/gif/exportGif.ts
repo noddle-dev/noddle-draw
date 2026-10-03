@@ -22,7 +22,7 @@ import {
   BEAM_CYCLE_MS,
   BEAM_DISTANCE,
   PULSE_CYCLE_MS,
-  DOTS_CYCLE_MS,
+  dotsCycleMs,
   dotsForLength,
   NODE_ANIM_CYCLE_MS,
   FLOW_INTENSITY,
@@ -185,7 +185,7 @@ export async function exportAnimatedGif(
   interface DotsEdge {
     group: Element;
     measure: SVGPathElement;
-    cycle: number;
+    speed: number | undefined;
     r: number;
     fill: string;
   }
@@ -200,7 +200,7 @@ export async function exportAnimatedGif(
     dotsEdges.push({
       group: g,
       measure: mp,
-      cycle: cycleMs(DOTS_CYCLE_MS, flowParams(g).speed),
+      speed: flowParams(g).speed,
       // the live circles already carry the intensity-scaled radius
       r: sample ? parseFloat(sample.getAttribute("r") ?? "3.5") : 3.5,
       fill: sample?.getAttribute("fill") ?? "#475569",
@@ -269,7 +269,7 @@ export async function exportAnimatedGif(
     for (const de of dotsEdges) {
       const len = de.measure.getTotalLength();
       if (!len) continue;
-      const dotsP = (t / de.cycle) % 1;
+      const dotsP = (t / dotsCycleMs(len, de.speed)) % 1; // constant velocity, = live renderer
       const n = dotsForLength(len); // match the live renderer's dot count
       for (let d = 0; d < n; d++) {
         const at = ((dotsP + d / n) % 1) * len;
