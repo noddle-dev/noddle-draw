@@ -321,7 +321,8 @@ export const useAppStore = create<AppState>((set) => ({
 
   gridOn: true,
   snapOn: true,
-  pageBackdrop: localStorage.getItem("noddle-page-backdrop") !== "0",
+  // default OFF (infinite canvas); only an explicit "1" turns it on
+  pageBackdrop: localStorage.getItem("noddle-page-backdrop") === "1",
   togglePageBackdrop: () =>
     set((s) => {
       try {

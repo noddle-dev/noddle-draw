@@ -22,7 +22,18 @@ const NO_VISION =
 /** Append an actionable hint to raw AI errors we recognize (job rows show the
  * server's message verbatim — this turns "HTTP 404: No endpoints found that
  * support image input" into something the user can act on). */
+/** "Your saved key is wrong" phrasings (Google's "Please pass a valid API key",
+ * OpenAI's "Incorrect API key", HTTP 401/403 from a provider…). */
+const BAD_KEY =
+  /pass a valid api key|api key not valid|invalid[_ ]?api[_ ]?key|incorrect api key|invalid x-api-key|authentication(_error)?|HTTP 40[13]\b/i;
+
 export function withAiHints(message: string): string {
+  if (BAD_KEY.test(message)) {
+    return (
+      message +
+      " → The API key saved in this browser was rejected by the provider. Open AI settings and fix it — or remove it to use the free shared pool (no key needed)."
+    );
+  }
   if (NO_VISION.test(message)) {
     return (
       message +
@@ -42,14 +53,14 @@ export function aiErrorMessage(err: unknown): string {
           "and it runs entirely on your key."
         );
       }
-      return detail;
+      return withAiHints(detail);
     }
     if (err.status === 422) {
       return detail
         ? `The AI couldn't produce a usable result: ${withAiHints(detail)}`
         : "The AI couldn't produce a usable result from this image — try a clearer image or add a description.";
     }
-    return err.message;
+    return withAiHints(err.message);
   }
-  return err instanceof Error ? err.message : String(err);
+  return err instanceof Error ? withAiHints(err.message) : String(err);
 }

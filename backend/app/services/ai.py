@@ -49,6 +49,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from app.domain import board_palette
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -130,6 +132,15 @@ _NO_CONFIG_MSG = (
 
 # --- domain errors (mapped to HTTP by app/api/ai.py) -----------------------
 
+
+
+def _on_palette(diagram: dict) -> dict:
+    """Snap a freshly generated board to the draw palette (in place)."""
+    try:
+        board_palette.enforce(diagram.get("nodes") or [], diagram.get("edges") or [])
+    except Exception:  # never fail a generation over styling
+        pass
+    return diagram
 
 class AIUnavailable(Exception):
     """The AI provider cannot be reached (no config / auth failure). -> 503."""
@@ -678,22 +689,37 @@ class AIService:
             # free pool): OpenRouter's `models` array routes to the first one
             # with capacity, so a rate-limited :free model doesn't 429 the app.
             m = model or OPENROUTER_MODEL
-            # OpenRouter rejects `models` arrays longer than 3 — clamp.
-            chain = [s.strip() for s in m.split(",") if s.strip()][:3]
-            extra = {"models": chain} if len(chain) > 1 else None
-            return self._chat_openai_compatible(
-                f"{OPENROUTER_BASE}/chat/completions",
-                {
-                    "Authorization": f"Bearer {key}",
-                    "HTTP-Referer": "https://draw.noddle.dev",
-                    "X-Title": "noddle draw",
-                },
-                chain[0] if chain else m,
-                messages,
-                max_tokens,
-                timeout=timeout,
-                extra_body=extra,
-            )
+            models = [s.strip() for s in m.split(",") if s.strip()] or [m]
+            # OpenRouter accepts at most 3 entries in `models`, so a longer
+            # chain is tried in groups of 3: a 429 (free tier rate-limited
+            # upstream) or a dead slug moves on to the next group instead of
+            # failing the request.
+            groups = [models[i:i + 3] for i in range(0, len(models), 3)]
+            last_err: Exception | None = None
+            for chain in groups:
+                extra = {"models": chain} if len(chain) > 1 else None
+                try:
+                    return self._chat_openai_compatible(
+                        f"{OPENROUTER_BASE}/chat/completions",
+                        {
+                            "Authorization": f"Bearer {key}",
+                            "HTTP-Referer": "https://draw.noddle.dev",
+                            "X-Title": "noddle draw",
+                        },
+                        chain[0],
+                        messages,
+                        max_tokens,
+                        timeout=timeout,
+                        extra_body=extra,
+                    )
+                except AIUnavailable as e:
+                    msg = str(e)
+                    if len(groups) > 1 and ("429" in msg or "404" in msg or "rate-limited" in msg or "No endpoints" in msg):
+                        last_err = e
+                        continue
+                    raise
+            assert last_err is not None
+            raise last_err
         if provider == "custom":
             # LiteLLM-style generic OpenAI-compatible provider: the user brings
             # the base URL AND the model id. Accept a base with or without the
@@ -1031,7 +1057,7 @@ class AIService:
             raise AIBadOutput(
                 f"Could not build a diagram from the model's output: {e}", raw=out
             ) from e
-        return self._spec_to_diagram(spec)
+        return _on_palette(self._spec_to_diagram(spec))
 
     # --- feature #2: text -> editable diagram -----------------------------
 
@@ -1050,7 +1076,7 @@ class AIService:
                 "Turn it into an editable node/edge diagram."
             )
         prompt = (
-            f"{intro}\n\n{_DIAGRAM_RULES}\n\n{_DIAGRAM_JSON_SHAPE}\n\nInput:\n{text}"
+            f"{intro}\n\n{_DIAGRAM_RULES}\n\n{_DIAGRAM_JSON_SHAPE}\n{board_palette.prompt_section()}\nInput:\n{text}"
         )
 
         data, raw = self._chat_json(
@@ -1062,7 +1088,7 @@ class AIService:
             raise AIBadOutput(
                 f"Could not build a diagram from the model's output: {e}", raw=raw
             ) from e
-        return self._spec_to_diagram(spec)
+        return _on_palette(self._spec_to_diagram(spec))
 
     # --- feature #3: live co-editing (chat edits the current diagram) ------
 
@@ -1144,7 +1170,8 @@ class AIService:
             '{"kind":"port","nodeId","rel":{"x","y"}} (rel on the border: '
             '{"x":0.5,"y":0}=top, {"x":1,"y":0.5}=right, {"x":0.5,"y":1}=bottom, '
             '{"x":0,"y":0.5}=left) | {"kind":"free","point":{"x","y"}}\n'
-            "\n## Layout rules (matter most on complex architectures)\n"
+            + board_palette.prompt_section()
+            + "\n## Layout rules (matter most on complex architectures)\n"
             "- Canvas is the artboard (typically 1600×1000); keep ≥40px margins.\n"
             "- NEVER overlap nodes: column pitch ≥220, row pitch ≥130, gap ≥40. "
             "Arrange complex systems in visual tiers/layers (top→bottom or "
@@ -1230,6 +1257,16 @@ class AIService:
         if not isinstance(result, dict):
             raise AIBadOutput("Result is missing 'diagram'.", raw=raw)
         nodes, edges = self._normalize_full_diagram(result)
+        # The draw palette for what THIS edit added — existing objects keep
+        # the user's colours (domain/board_palette.py).
+        before = {
+            str(o.get("id"))
+            for o in [*(diagram.get("nodes") or []), *(diagram.get("edges") or [])]
+            if isinstance(o, dict)
+        }
+        added = {str(o.get("id")) for o in [*nodes, *edges] if isinstance(o, dict) and str(o.get("id")) not in before}
+        if added:
+            board_palette.enforce(nodes, edges, only_ids=added)
         message = str(data.get("message") or "Diagram updated.")[:600]
         return {
             "message": message,
