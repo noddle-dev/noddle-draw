@@ -59,3 +59,12 @@ def tool(b, name: str, arguments: dict) -> dict:
     result = call(b, name, arguments)
     assert not result["isError"], result
     return result["structuredContent"]
+
+
+def rpc(b, method: str, params: dict | None = None) -> dict:
+    """One JSON-RPC method through the server's own dispatch table (modern era),
+    returned as the ``{"result": …}`` / ``{"error": …}`` envelope the wire carries."""
+    m = core()
+    ctx = m.Ctx("modern", m.MODERN_VERSIONS[0], b)
+    handler = m.MODERN_METHODS[method]
+    return json.loads(json.dumps(m.execute(1, handler, dict(params or {}), ctx)))

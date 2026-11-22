@@ -351,6 +351,10 @@ class StdioServerTest(_Harness):
                 Draft202012Validator.check_schema(schema)
                 Draft202012Validator.check_schema(t["outputSchema"])
         by = {t["name"]: t["annotations"] for t in r["tools"]}
+        ui = {t["name"] for t in r["tools"] if t.get("_meta", {}).get("ui", {}).get("resourceUri")}
+        self.assertEqual(ui, {"capture_board", "create_board", "patch_board", "read_board_summary"})
+        self.assertFalse(by["patch_board"]["readOnlyHint"])
+        self.assertTrue(by["read_board_summary"]["readOnlyHint"])
         self.assertTrue(by["get_board"]["readOnlyHint"])
         self.assertTrue(by["update_board"]["destructiveHint"])
         self.assertFalse(by["create_board"]["idempotentHint"])
@@ -514,6 +518,53 @@ class StdioServerTest(_Harness):
         self.assertGreaterEqual(lint["error_count"], 2)
         self.assertIn("SELF-REVIEW", lint["checklist"])
 
+    def test_patch_board_applies_ops_and_metadata_as_the_agent(self) -> None:
+        read = self.mcp.call("get_board", {"doc_id": DOC})["result"]["structuredContent"]
+        r = self.mcp.call("patch_board", {
+            "doc_id": f"{self.fake.url}/d/{DOC}", "edit_revision": read["edit_revision"],
+            "category": "architecture",
+            "metadata": {"summary": "Payments", "tags": ["pci"]},
+            "ops": [{"op": "add", "node": {"id": "db", "kind": "cylinder", "x": 300, "y": 0, "w": 60,
+                                           "h": 40, "text": "Orders database", "role": "database",
+                                           "meta": {"tech": "postgres"}}}],
+        })["result"]
+        self.assertFalse(r["isError"], r)
+        sc = r["structuredContent"]
+        self._check_output_schema("patch_board", sc)
+        self.assertEqual(sc["applied_ops"], 2)
+        put = self.fake.puts[-1]
+        self.assertEqual(put["author_name"], "Test agent")
+        self.assertIs(put["agent"], True)
+        self.assertEqual(put["base_diagram"], read["diagram"])
+        self.assertEqual(put["diagram"]["metadata"], {"summary": "Payments", "tags": ["pci"]})
+        nodes = {n["id"]: n for n in put["diagram"]["pages"][0]["nodes"]}
+        self.assertEqual(nodes["n1"], read["diagram"]["pages"][0]["nodes"][0])  # untouched
+        db = nodes["db"]
+        self.assertEqual(db["meta"], {"tech": "postgres", "role": "database"})
+        self.assertNotIn("role", db)  # shorthand expanded, kept only as meta.role
+        self.assertGreaterEqual(db["w"], 60)  # auto_fit may only grow it
+        self.assertRegex(sc["edit_revision"], r"^[0-9a-f]{32}$")
+        empty = self.mcp.call("patch_board", {"doc_id": DOC})["result"]
+        self.assertTrue(empty["isError"])
+
+    def test_read_board_summary_is_geometry_free(self) -> None:
+        r = self.mcp.call("read_board_summary", {"doc_id": DOC})["result"]
+        self.assertFalse(r["isError"], r)
+        sc = r["structuredContent"]
+        self._check_output_schema("read_board_summary", sc)
+        self.assertEqual(sc["preview_url"], f"{self.fake.url}/embed/{DOC}")
+        self.assertNotIn('"x":', json.dumps(sc["pages"]))
+        self.assertTrue(any(c["type"] == "resource_link" for c in r["content"]))
+
+    def test_capture_board_crops_and_returns_lint(self) -> None:
+        r = self.mcp.call("capture_board", {"doc_id": DOC, "page_id": "p1", "node_ids": ["n1"]})["result"]
+        self.assertFalse(r["isError"], r)
+        self.assertEqual(self.fake.captures[-1]["node_ids"], ["n1"])
+        sc = r["structuredContent"]
+        self.assertIn("lint", sc)
+        self.assertNotIn("edge_routes", sc)
+        self.assertEqual([c["type"] for c in r["content"]][:2], ["text", "image"])
+
     def test_view_only_link_write_is_tool_error(self) -> None:
         r = self.mcp.call("update_board", {"doc_id": VIEW_ONLY, "diagram": {"nodes": [], "edges": []}})
         self.assertTrue(r["result"]["isError"])
@@ -575,13 +626,20 @@ class StdioServerTest(_Harness):
     # -- resources / prompts -----------------------------------------------------------
 
     def test_resources(self) -> None:
+        static = ["noddle://style-guide", "ui://noddle/preview"]
         lst = self.mcp.request("resources/list", meta=modern_meta())["result"]
-        self.assertEqual(lst["resources"], [])  # nothing known yet — there is no listing API
+        # Only the static resources until a board is known — there is no listing API.
+        self.assertEqual([x["uri"] for x in lst["resources"]], static)
         self.assertEqual(lst["cacheScope"], "private")
         self.mcp.call("get_board", {"doc_id": DOC})
         self.mcp.call("create_board", {"name": "New one"})
         uris = [x["uri"] for x in self.mcp.request("resources/list", meta=modern_meta())["result"]["resources"]]
-        self.assertEqual(uris, ["noddle://board/fedcba987654", f"noddle://board/{DOC}"])  # newest first
+        self.assertEqual(uris, static + ["noddle://board/fedcba987654", f"noddle://board/{DOC}"])  # newest first
+        guide = self.mcp.request("resources/read", {"uri": "noddle://style-guide"}, meta=modern_meta())["result"]
+        self.assertEqual(guide["contents"][0]["mimeType"], "text/markdown")
+        self.assertEqual(guide["cacheScope"], "public")
+        card = self.mcp.request("resources/read", {"uri": "ui://noddle/preview"}, meta=modern_meta())["result"]
+        self.assertEqual(card["contents"][0]["mimeType"], "text/html;profile=mcp-app")
         tpl = self.mcp.request("resources/templates/list", meta=modern_meta())["result"]
         self.assertEqual(tpl["resourceTemplates"][0]["uriTemplate"], "noddle://board/{doc_id}")
         rd = self.mcp.request("resources/read", {"uri": f"noddle://board/{VIEW_ONLY}"}, meta=modern_meta())

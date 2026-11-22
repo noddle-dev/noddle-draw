@@ -6,13 +6,15 @@
  *   • hover → connection ports appear INSIDE this group (so they can never
  *     steal pointerdown from other nodes — the old separate ports layer
  *     covered sibling nodes and broke dragging);
- *   • double-click → inline text edit.
+ *   • double-click → inline text edit;
+ *   • semantic `meta` → a quiet corner badge (+ hover card in select/pan
+ *     mode) — editor-only chrome, see ./SemanticBadge.
  *
  * Thin-React: screen→content conversion uses the SHARED camera via the
  * editorStore content ref; math lives in editor-core. Drag mutates only x/y
  * through moveNode so connected edges re-route on render ("sticky").
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
 import { screenToContent } from "../../editor-core";
 import { cycleCss, NODE_ANIM_CYCLE_MS, freedrawPath } from "../../editor-core/diagram";
@@ -26,6 +28,8 @@ import { LABEL_INK, nodeFontStack, nodeFontWeight } from "./typography";
 import { ConnectionPorts, type PreviewEdge } from "./ConnectionPorts";
 import { shapeElement } from "./ShapePalette";
 import { labelLines } from "./textWrap";
+import { wantsSemanticBadge } from "../../editor-core/diagram/semantics";
+import { SemanticBadge, SemanticTooltip } from "./SemanticBadge";
 
 const SELECT_STROKE = "#6965db"; // Excalidraw selection violet
 /** Snap increment — half of the 22px background grid. */
@@ -61,6 +65,10 @@ export function NodeView({
   // dragging it — the Lucid/Figma affordance for "this is draggable".
   const dragging = useDiagramStore((s) => s.draggingId === node.id);
   const [hovered, setHovered] = useState(false);
+  // Semantic hover card: only while browsing (select / hand), never mid-drag.
+  const browseMode = useEditorStore((s) => s.tool === "select" || s.tool === "pan");
+  const shapeRef = useRef<SVGGElement>(null);
+  const semantic = wantsSemanticBadge(node);
 
   const onPointerDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
@@ -244,6 +252,7 @@ export function NodeView({
           speed is inline (beats the class default); data-* attrs let the GIF
           exporter bake the exact same motion deterministically. */}
       <g
+        ref={shapeRef}
         opacity={erasing ? 0.25 : nodeOpacity}
         // Rotation wraps shape+text; the selection box, grips and rotate
         // handle carry the SAME transform (drawn outside this group so the
@@ -356,6 +365,12 @@ export function NodeView({
           vectorEffect="non-scaling-stroke"
           style={{ pointerEvents: "none" }}
         />
+      )}
+      {/* Quiet semantic badge (editor-only — stripped from every export and
+          capture). Below the resize grips so the NE grip always wins. */}
+      {semantic && <SemanticBadge node={node} hovered={hovered} />}
+      {semantic && hovered && !dragging && browseMode && (
+        <SemanticTooltip node={node} anchor={shapeRef.current} />
       )}
       {/* Resize grips LAST so they sit above the connect overlay. */}
       {selected && !arrowMode && <ResizeHandles node={node} />}

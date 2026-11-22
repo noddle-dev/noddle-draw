@@ -19,14 +19,20 @@ export async function importBoardFile(file: File): Promise<DocMeta> {
   }
   if (ext === "json") {
     const payload = JSON.parse(await file.text()) as {
+      metadata?: unknown;
       pages?: unknown[];
       nodes?: unknown[];
       edges?: unknown[];
     };
+    // Diagram-level semantic metadata rides along (the server sanitizes it).
+    const meta =
+      payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
+        ? { metadata: payload.metadata }
+        : {};
     const diagram = Array.isArray(payload.pages)
-      ? { pages: payload.pages }
-      : { nodes: (payload.nodes ?? []) as never, edges: (payload.edges ?? []) as never };
-    return api.create({ name, diagram });
+      ? { ...meta, pages: payload.pages }
+      : { ...meta, nodes: (payload.nodes ?? []) as never, edges: (payload.edges ?? []) as never };
+    return api.create({ name, diagram: diagram as never });
   }
   return api.importFile(file); // .drawio / .xml
 }

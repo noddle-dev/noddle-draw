@@ -378,8 +378,9 @@ def capture_document(
         raise HTTPException(
             status_code=422, detail="This page is too large to capture. Split it into smaller pages."
         )
+    capture_payload = {**page, "node_ids": body.node_ids} if body.node_ids else page
     try:
-        image = diagram_capture.capture_diagram(page)
+        image = diagram_capture.capture_diagram(capture_payload)
     except diagram_capture.CaptureUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     try:

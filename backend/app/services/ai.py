@@ -57,6 +57,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.domain.diagram_metadata import sanitize_object_meta
 from app.security.svg_sanitizer import sanitize_svg
 
 # Databricks serving-endpoint name for Claude Opus 4.8. Override per workspace
@@ -1472,6 +1473,11 @@ class AIService:
             z = opt_num(n.get("z"))
             if z is not None:
                 node["z"] = z
+            # Semantic tags (role/tech/layer …) — bounded + sanitized, never
+            # rendered; an AI edit must not strip an agent's annotations.
+            node_meta = sanitize_object_meta(n.get("meta"))
+            if node_meta:
+                node["meta"] = node_meta
             nodes.append(node)
 
         def attachment(v: object) -> dict | None:
@@ -1569,6 +1575,9 @@ class AIService:
             ez = opt_num(e.get("z"))
             if ez is not None:
                 edge["z"] = ez
+            edge_meta = sanitize_object_meta(e.get("meta"))
+            if edge_meta:
+                edge["meta"] = edge_meta
             wps = e.get("waypoints")
             if isinstance(wps, list) and wps:
                 pts = [

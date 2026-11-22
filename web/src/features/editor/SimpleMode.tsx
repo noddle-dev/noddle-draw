@@ -4,7 +4,8 @@
  *
  * Excalidraw-style spatial hierarchy over the UNCHANGED canvas engine:
  *   • top-left     — ☰ File menu island (board, export, view, present…)
- *                    + renamable board title (view-only tag);
+ *                    + renamable board title (view-only tag)
+ *                    + the quiet board-semantics trigger (SemanticPopover);
  *   • top-center   — floating tool island: the essential shapes (click to add,
  *                    drag to place — same startShapeDrag as the full palette)
  *                    plus the Library browser (L) and ⋯ which opens the
@@ -37,6 +38,7 @@ import { RightPanel } from "./RightPanel";
 import { LibraryPanel } from "../library";
 import { copyPngToClipboard } from "../toolbar/useExport";
 import { ShortcutsDialog } from "./ShortcutsDialog";
+import { SemanticTrigger } from "./SemanticPopover";
 
 /** One island slot: a MODE (select cursor / draw-arrow) or a shape to add. */
 type IslandMode = "select" | "arrow" | "text" | "pan" | "pen" | "eraser" | "laser";
@@ -481,6 +483,9 @@ export function SimpleChrome() {
             {myRole === "viewer" && <span className="simple-viewer"> · view only</span>}
           </button>
         )}
+        {/* Quiet board semantics (summary/category/tags) — metadata only,
+            never drawn on the canvas. */}
+        {docId && <SemanticTrigger readOnly={myRole === "viewer"} />}
       </div>
 
       {/* Excalidraw-style tool hint under the island (eraser only) */}

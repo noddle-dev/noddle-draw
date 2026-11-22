@@ -750,6 +750,12 @@ components:
           type: [number, "null"]
           description: Fail with 409 unless this is still the saved revision;
             omitted ⇒ capture whatever is saved now
+        node_ids:
+          type: [array, "null"]
+          maxItems: 1000
+          items: { type: string }
+          description: Crop tightly around these nodes (and the edges between
+            them) for a crisp 2x close-up; omitted ⇒ the whole page
     CaptureOut:
       type: object
       required: [id, page_id, updated_at, png_base64, width, height, renderer]
@@ -773,6 +779,33 @@ components:
             items:
               type: array
               items: { type: number }
+        cropped:
+          type: boolean
+          description: true when node_ids narrowed the capture
+        text_metrics:
+          type: object
+          description: Browser-measured node text boxes {x,y,w,h} keyed by
+            node id (content coords) — pixel-accurate DOM lint input
+          additionalProperties:
+            type: object
+            properties:
+              x: { type: number }
+              y: { type: number }
+              w: { type: number }
+              h: { type: number }
+        edge_label_metrics:
+          type: object
+          description: Browser-measured edge label boxes keyed by edge id
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              properties:
+                x: { type: number }
+                y: { type: number }
+                w: { type: number }
+                h: { type: number }
+                text: { type: string }
     CreateDocBody:
       type: object
       properties:
@@ -847,8 +880,10 @@ components:
     Diagram:
       type: object
       required: [nodes, edges]
-      description: Legacy single-page shape — the client loads it as "Page 1"
+      description: Legacy single-page shape — the client loads it as "Page 1".
+        May also carry the diagram-level `metadata` on this root.
       properties:
+        metadata: { $ref: "#/components/schemas/DiagramMetadata" }
         nodes:
           type: array
           items: { $ref: "#/components/schemas/DiagramNode" }
@@ -858,8 +893,11 @@ components:
     PagedDiagram:
       type: object
       required: [pages]
-      description: Multi-page sidecar — serialized JSON capped at 1MB
+      description: Multi-page sidecar — serialized JSON capped at 1MB. Mirror
+        of the editor's pagesStore.collect() shape; metadata is optional at
+        both levels and survives saves and three-way merges.
       properties:
+        metadata: { $ref: "#/components/schemas/DiagramMetadata" }
         pages:
           type: array
           items: { $ref: "#/components/schemas/DiagramPage" }
@@ -875,7 +913,65 @@ components:
         edges:
           type: array
           items: { $ref: "#/components/schemas/DiagramEdge" }
-        hidden: { type: boolean }
+        hidden: { type: boolean, description: Excluded from present mode and deck export. }
+        metadata: { $ref: "#/components/schemas/PageMetadata" }
+    ObjectMeta:
+      type: object
+      description: >-
+        Mirror of types.ts::ObjectMeta — free-form semantic tags on one node or
+        edge (role, layer, tech, protocol, sla, owner, status, tags, url …).
+        Bounded: <= 20 keys of 1..64 chars; values are string | number |
+        boolean or a list of <= 20 of those. Invalid entries are stripped.
+      maxProperties: 20
+      additionalProperties:
+        oneOf:
+          - type: string
+          - type: number
+          - type: boolean
+          - type: array
+            maxItems: 20
+            items:
+              oneOf:
+                - type: string
+                - type: number
+                - type: boolean
+    DiagramMetadata:
+      type: object
+      description: Mirror of types.ts::DiagramMetadata — board-level semantics for fast agent reads.
+      properties:
+        category:
+          type: string
+          description: architecture | flowchart | data | org | timeline, or a custom value.
+        summary: { type: string, maxLength: 1000 }
+        domain: { type: string }
+        tags:
+          type: array
+          maxItems: 20
+          items: { type: string }
+        owner: { type: string }
+        version: { type: string }
+        links:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [label, url]
+            properties:
+              label: { type: string }
+              url: { type: string, description: http(s) only. }
+        custom: { $ref: "#/components/schemas/ObjectMeta" }
+    PageMetadata:
+      type: object
+      description: Mirror of types.ts::PageMetadata — one page's semantics.
+      properties:
+        category: { type: string }
+        summary: { type: string, maxLength: 1000 }
+        tags:
+          type: array
+          maxItems: 20
+          items: { type: string }
+        notes: { type: string, maxLength: 4000 }
+        custom: { $ref: "#/components/schemas/ObjectMeta" }
     Vec:
       type: object
       required: [x, y]
@@ -958,6 +1054,7 @@ components:
           type: number
           description: Unified paint order across nodes AND edges (higher →
             on top); absent → legacy two-pass paint order
+        meta: { $ref: "#/components/schemas/ObjectMeta" }
     NodeKind:
       type: string
       enum: [rect, rounded, ellipse, diamond, text, process, terminator,
@@ -1068,6 +1165,7 @@ components:
           description: User-owned elbow corners; absent → the auto router
             decides. OMITTED on AI-created/rerouted edges.
         z: { type: number }
+        meta: { $ref: "#/components/schemas/ObjectMeta" }
     # ---- AI wire shapes ----------------------------------------------------
     SvgOut:
       type: object
