@@ -54,6 +54,30 @@ export function titleCase(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
+/** The quiet tones the semantic UI tints a role with — component glyphs, flow
+ * endpoint dots, the role-mix bar and the hover card all read this one map. */
+export type RoleTone = "data" | "compute" | "edge" | "guard" | "client" | "plain";
+
+export const ROLE_TONES: readonly RoleTone[] = ["client", "edge", "compute", "data", "guard", "plain"];
+
+export function roleTone(role: string | undefined): RoleTone {
+  switch ((role ?? "").trim().toLowerCase()) {
+    case "database": case "datastore": case "storage": case "cache": case "table":
+      return "data";
+    case "service": case "compute": case "component": case "analytics": case "ml":
+    case "step": case "transform":
+      return "compute";
+    case "gateway": case "queue": case "focal": case "external": case "vpc": case "decision":
+      return "edge";
+    case "security": case "alert": case "monitoring":
+      return "guard";
+    case "client": case "actor": case "source":
+      return "client";
+    default:
+      return "plain";
+  }
+}
+
 /** True for an absolute http(s) URL (never javascript:/data:). */
 export function isHttpUrl(v: unknown): v is string {
   if (typeof v !== "string") return false;
