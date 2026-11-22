@@ -38,7 +38,7 @@ import { exportBoardJson, exportMermaid } from "./boardExports";
 type IconName =
   | "plus" | "clock" | "upload" | "save" | "copy" | "pencil" | "folder"
   | "download" | "play" | "history" | "share" | "grid" | "eye" | "chev" | "check" | "keys"
-  | "spark";
+  | "spark" | "overview";
 
 export type { ExportScope };
 
@@ -70,6 +70,12 @@ function Ico({ name }: { name: IconName }) {
     ),
     check: <path d="M5.4 12.6 C6.9 14, 8.4 15.6, 9.8 17.4 C12.4 13.2, 15.3 9.6, 18.8 6.6" />,
     chev: <path d="M9.5 7 L14.6 12 L9.5 17" />,
+    overview: (
+      <>
+        <path d="M4.6 4.8 C7 4.7, 9.6 4.7, 10.6 4.9 L10.5 12.4 C9.4 12.6, 6.9 12.5, 4.7 12.4 Z M13.4 4.8 C15.5 4.7, 18.1 4.8, 19.3 4.9 L19.2 8.8 C17.9 9, 15.4 8.9, 13.5 8.8 Z" />
+        <path d="M13.4 11.6 C15.5 11.5, 18.1 11.6, 19.3 11.7 L19.2 19.1 C17.9 19.3, 15.4 19.2, 13.5 19.1 Z M4.6 15.4 C7 15.3, 9.6 15.3, 10.6 15.5 L10.5 19.1 C9.4 19.3, 6.9 19.2, 4.7 19.1 Z" />
+      </>
+    ),
     spark: <path d="M12 4.5 C12.6 8.6, 13.6 10.6, 19.5 12 C13.6 13.4, 12.6 15.4, 12 19.5 C11.4 15.4, 10.4 13.4, 4.5 12 C10.4 10.6, 11.4 8.6, 12 4.5 Z" />,
     keys: <path d="M4 7.2 C4 6.6, 20 6.5, 20 7.2 L19.9 16.9 C19.9 17.5, 4.1 17.5, 4.1 16.9 Z M7 10.2 H8 M10.5 10.2 H11.5 M14 10.2 H15 M17 10.2 H17.2 M7.6 14 C10.4 13.9, 13.6 14.1, 16.4 14" />,
   };
@@ -89,6 +95,7 @@ export function SimpleFileMenu({
   onShare,
   onGif,
   onHistory,
+  onOverview,
 }: {
   title: string;
   canSave: boolean;
@@ -97,6 +104,8 @@ export function SimpleFileMenu({
   onShare: () => void;
   onGif: (scope: ExportScope) => void;
   onHistory: () => void;
+  /** Opens the title-island board overview & semantics popover. */
+  onOverview: () => void;
 }) {
   const docId = useEditorStore((s) => s.docId);
   const docs = useEditorStore((s) => s.docs);
@@ -244,6 +253,7 @@ export function SimpleFileMenu({
       })}
       {row("Make a copy", "copy", () => void makeCopy(), { disabled: !docId, keep: true })}
       {row("Rename", "pencil", onRename, { disabled: !canSave })}
+      {row("Board overview & semantics", "overview", onOverview, { disabled: !docId })}
 
       <div className="simple-menu-sep" />
       {row("Export", "download", () => toggle("export"), { expanded: open === "export" })}

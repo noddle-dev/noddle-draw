@@ -2241,6 +2241,9 @@ code { background: var(--panel-2); border: 1px solid var(--border); padding: 1px
   box-shadow: 0 0 0 3px var(--sem-ring), var(--shadow-float);
 }
 .sem-trigger:focus-visible { outline: 2px solid var(--sem-accent); outline-offset: 2px; }
+/* No category → a quiet square icon button that sits beside the title. */
+.sem-trigger.icon-only { width: 38px; padding: 0; justify-content: center; }
+.sem-trigger.has-cat { padding: 0 8px 0 7px; gap: 7px; }
 .sem-trigger-t { font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; }
 .sem-trigger-chev { flex: none; color: var(--faint); transition: transform .22s var(--sem-ease), color .16s ease; }
 .sem-trigger:hover .sem-trigger-chev { color: var(--sem-soft); }
@@ -2866,6 +2869,7 @@ span.sem-chip { cursor: default; }
 /* ---- Small screens & motion ------------------------------------------------- */
 @media (max-width: 720px) {
   .sem-trigger { height: 34px; padding: 0 6px; }
+  .sem-trigger.icon-only { width: 34px; padding: 0; }
   .sem-trigger-t, .sem-trigger .sem-cat-pill, .sem-trigger-chev { display: none; }
 }
 @media (max-width: 640px) {
