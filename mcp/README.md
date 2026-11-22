@@ -87,9 +87,13 @@ id or the board URL (`{base}/d/{id}` or `/embed/{id}`). A URL on a different ori
 
 | Tool | readOnly | destructive | idempotent | openWorld | What it does |
 |---|---|---|---|---|---|
-| `get_board` | ✓ | | | ✗ | Name, url, `my_role` (`editor`/`viewer`), `updated_at`, page summary and diagram JSON. Optional `page_id` and `include_svg` |
-| `create_board` | ✗ | ✗ | ✗ | ✗ | New board, with optional diagram JSON. Anyone with its url can edit it |
-| `update_board` | ✗ | ✓ | ✓ | ✗ | Replace the WHOLE diagram (fetch → edit → send back). A version snapshot is kept. `expected_updated_at` turns a concurrent edit into a conflict error instead of an overwrite |
+| `get_board` | ✓ | | | ✗ | Name, url, `my_role` (`editor`/`viewer`), `updated_at`, a short-lived `edit_revision`, page summary and the LIVE diagram JSON (includes edits awaiting browser autosave). Optional `page_id` and `include_svg` (a `page_id` on a multi-page board returns `svg_note` instead of the wrong page's SVG) |
+| `create_board` | ✗ | ✗ | ✗ | ✗ | Only for an explicitly requested NEW board, with optional diagram JSON. Anyone with its url can edit it |
+| `update_board` | ✗ | ✓ | ✓ | ✗ | Send the WHOLE diagram back with `edit_revision` (or `expected_updated_at`): only the fields you changed merge with the live board. A version snapshot is kept. Returns `post_save_check` |
+| `clone_diagram` | ✗ | ✗ | ✗ | ✗ | Copy all/selected nodes of one page to the RIGHT on the same page (groups, edges, waypoints remapped) and return old→new id maps. The first step before revising a diagram |
+| `capture_board` | ✓ | | | ✗ | Render one saved page through the editor's own renderer and return an MCP `image/png` block. `expected_updated_at` makes a stale capture fail |
+| `lint_board` | ✓ | | | ✗ | Self-review: layout errors/warnings with ids and a fix each, plus edges routed through shapes/text (from the rendered routes) |
+| `join_board` | ✗ | ✗ | ✓ | ✗ | Show the agent (`NODDLE_AGENT_NAME`) in the board's live presence for ~5 min without writing |
 | `rename_board` | ✗ | ✗ | ✓ | ✗ | Rename |
 | `list_versions` | ✓ | | | ✗ | Version-history snapshots, newest first |
 | `get_version` | ✓ | | | ✗ | One snapshot's diagram. To restore it, pass it to `update_board` |
@@ -121,10 +125,11 @@ Errors:
   `noddle://board/{doc_id}`, so a client can read any board by id. `resources/read`
   returns the same JSON as `get_board`. An unknown board returns `-32602`.
 - **Prompts**:
-  - `design_board(topic, notes?)`: generate → sanity-check → `create_board` → reply with
-    the url.
-  - `review_board(doc_id)`: embeds the board as a resource and asks for a critique posted
-    as anchored comments.
+  - `design_board(topic, notes?, doc_id?)`: without `doc_id`, generate → sanity-check →
+    `create_board` → lint/capture → reply with the url. With `doc_id`, the revise-beside-the-
+    original workflow below.
+  - `review_board(doc_id)`: embeds the board as a resource, runs `lint_board` +
+    `capture_board`, and asks for a critique posted as anchored comments.
 
 ## 4. Example (Claude Code)
 
@@ -138,8 +143,7 @@ Claude: generate_diagram(text="Client -> API Gateway -> Payment Service -> Datab
         → returns https://draw.noddle.dev/d/{id}
 ```
 
-Comments reach an open board in realtime. A diagram written with `update_board` shows up
-when the board is reloaded.
+Comments and diagram writes reach an open board in realtime.
 
 ## 5. Tests
 
@@ -149,8 +153,11 @@ python3 -m pytest mcp -q        # or: python3 -m unittest discover mcp
 
 `test_noddle_mcp.py` runs the real server over stdio against a fake in-process REST
 backend. It covers version negotiation (modern and legacy), schema validity, read and
-write tools, board-URL ids, view-only links, resources, prompts, BYOK header forwarding
-and error paths. It also asserts that stdout carries only JSON-RPC, that no request ever
+write tools (incl. `edit_revision` read bases, `post_save_check`, `clone_diagram`,
+`capture_board`, `lint_board`, `join_board`), board-URL ids, view-only links, resources,
+prompts, BYOK header forwarding and error paths. `backend/tests/test_mcp_comparison.py`
+and `test_mcp_live_collab.py` drive the same tool table in-process against the real app.
+The stdio tests also assert that stdout carries only JSON-RPC, that no request ever
 carries an `Authorization` header, and that a BYOK key never leaks into output or logs.
 
 ## Releasing
@@ -178,3 +185,48 @@ serves the publisher's ed25519 public key at `/.well-known/mcp-registry-auth`.
   host. A BYOK key over plain `http` to a non-loopback host logs a warning.
 - `generate_diagram` sends text to an AI provider. Never pass customer PII, credentials or
   account numbers.
+
+## Revising a board beside the original
+
+For an existing board, `get_board`, then `clone_diagram` with the saved
+`expected_updated_at` and the intended `page_id` (mandatory for multi-page boards). The
+clone sits to the right on the **same canvas**; its new node/group/edge ids come back as
+maps and originals and other pages stay intact. `node_ids` limits the clone to a fragment;
+edges crossing outside it are omitted and reported. Edit only the clone ids with
+`update_board`, then `capture_board` with `page_id` and the returned `updated_at`, inspect
+the PNG, fix and capture again. Show the before/after and ask whether to keep both,
+replace the original or move the revision to a new board. Results say
+`visual_validation: "pending_image_inspection"` — generating an image is not a review.
+
+PNG capture needs `web/dist/capture.js` (`npm run build`) and Chromium on the server; the
+Docker image ships both. It runs offline in a throwaway profile under a network-denying
+CSP, one capture at a time, 25-second timeout. A missing browser/bundle returns a 503 tool
+error and nothing else is affected.
+
+## Live collaboration
+
+MCP edits don't require closing an open editor. `get_board` returns the live board plus a
+short-lived `edit_revision`; `update_board` sends that read base as `base_diagram` and the
+server merges only the fields the agent changed onto the live board — a human's move and
+the agent's label change both survive; the same field is last-write-wins. Read bases live
+only in this stdio process (bound to `NODDLE_BASE_URL` + agent name and the board), expire
+after ten minutes and are capped at twelve. Passing just `expected_updated_at` also uses a
+cached read base when one matches; without one, a stale revision is a conflict error.
+
+Saves are pushed to open editors immediately and show the agent in presence for 30 s;
+`join_board` shows it for ~5 min without writing. Agent presence carries `kind: "agent"`,
+and when the agent name contains the word "Claude" the server adds `icon: "claude"` so the
+editor draws the Claude mark. Like every anonymous identity, the name is display-only.
+
+## Post-save check and lint
+
+Every `update_board` / `clone_diagram` result carries `post_save_check`:
+`manual_changes` (objects someone else added/removed/modified while you worked — never
+revert them silently) and `issues` on the pages you changed, each with `yours` (fix yours,
+report and ask about the rest). Lists are capped at 20 with `*_count` totals.
+
+`lint_board {doc_id, page_id?, check_routes?}` uses the same detectors. **Errors**:
+`stray_shape`, `tiny_shape`, `duplicate`, `overlap`, `straddles_frame`, `text_overlap`,
+`dangling_edge`, `edge_crosses_shape`, `edge_crosses_text`. **Warnings**: `text_overflow`,
+`misaligned`, `empty_shape`, `orphan`, `empty_container`, `duplicate_edge`. Route checks
+render each page (~2 s); without a renderer the result lists `routes_unchecked` + a `note`.

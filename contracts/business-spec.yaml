@@ -123,11 +123,15 @@ flows:
       - Each connects to /ws/documents/{doc_id} — no auth; join requires the
         board's link_policy to grant "view", state broadcast requires "edit".
       - The protocol is full-state last-write-wins — hello/state/cursor up;
-        init/presence/state/cursor/bye/comments down. No CRDT, no OT.
+        init/presence/state/cursor/bye/comments down. No CRDT, no OT. A state
+        frame or save carrying its read base merges only the fields its
+        author changed, so concurrent edits elsewhere survive (LWW per field).
       - clientId in hello dedups reconnects — a new hello evicts the prior
         socket with the same clientId.
-      - The room keeps the latest diagram in memory so late joiners sync
-        instantly; durable persistence stays explicit (Save → PUT).
+      - The server keeps the live diagram in memory so late joiners sync
+        instantly; durable persistence stays explicit (Save → PUT), and
+        HTTP/MCP saves are pushed into the room. An MCP agent can announce
+        itself in presence (POST /presence) without writing.
       - Comment mutations over REST push the full comment list into the
         room as a comments frame.
   ai_draw:
@@ -322,7 +326,8 @@ out_of_scope:
   - Accounts, login, sessions, teams, billing — anonymous-only by design.
   - Board listing/discovery API, board deletion, link-policy toggling.
   - Server-side storage of AI keys (BYOK is per-request headers only).
-  - CRDT/OT merge for collaboration — the protocol is full-state LWW.
+  - CRDT/OT merge for collaboration — the protocol is full-state LWW (per
+    field when a read base is supplied).
   - Horizontal scaling — collab rooms and FreePool counters are in-memory;
     the app is single-instance by design.
   - Any locale beyond English (public OSS repo rule).

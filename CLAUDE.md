@@ -70,6 +70,27 @@ There is no Python linter/formatter config checked in; match surrounding style.
   `PgAuditStore` (ops audit log) + `PgAIJobStore` (AI job history). Tables
   from the old accounts build are left untouched but no longer created.
 
+### Live merge, agent presence, PNG capture
+- `DocumentService` keeps an in-memory LIVE diagram per open collab room
+  (`begin_live`/`end_live`/`apply_live_page`; `GET /api/documents/{id}` reads
+  it). WS `state` frames and `PUT` saves that carry their read base
+  (`baseDiagram` / `base_diagram`) are 3-way merged per field by
+  `domain/diagram_merge.py`; base-less frames/saves stay full-state LWW.
+  Without a base, `expected_updated_at` → 409 `DocumentConflict`. Writes are
+  serialized by the service lock. Saves are pushed into the room
+  (`collab.publish_document_save`). The web client tracks its bases in
+  `collabStore` (`sentPages`) / `editorStore` (`savedDiagramBase`) and merges
+  remote frames with `state/collabMerge.ts`.
+- `POST /api/documents/{id}/presence {name}` (MCP `join_board`) shows an
+  agent in presence (`kind:"agent"`, `icon:"claude"` when the name says
+  Claude); `PUT … {agent:true}` does the same for 30 s on save.
+- `POST /api/documents/{id}/capture` renders one saved page to PNG via
+  headless Chromium + `web/dist/capture.js` (built by `web/build-capture.mjs`
+  from `features/diagram/capture.tsx`, offline, CSP-locked; also returns
+  `edge_routes` for MCP `lint_board`). No browser/bundle ⇒ 503.
+- Fonts are bundled OFL TTFs (`web/src/assets/fonts`, `shared/fonts.ts`) and
+  embedded into SVG/PNG/GIF exports and captures.
+
 ### AI / BYOK (client-side keys)
 - BYOK is PER-REQUEST: the browser keeps `{provider,key,model,base}` in
   `localStorage["noddle.aiKey"]` and sends `X-AI-Provider/X-AI-Key/X-AI-Model/
@@ -131,7 +152,8 @@ There is no Python linter/formatter config checked in; match surrounding style.
 - Document ids are `uuid4().hex[:12]`, validated `^[0-9a-f]{12}$` (keep it).
   See `domain/ids.py`.
 - File writes go through `infrastructure/atomic.py:atomic_write_text`.
-- Single instance only: collab rooms are in-memory — never scale replicas.
+- Single instance only: collab rooms and live diagrams are in-memory — never
+  scale replicas.
 - `GET /api/health` is liveness only and never touches the DB.
 - Never log request headers around the AI routes (they carry raw BYOK keys).
 - Framing: only `/embed/{id}` is iframe-able (`frame-ancestors *`); every other
