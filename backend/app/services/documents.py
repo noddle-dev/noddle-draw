@@ -22,6 +22,7 @@ from dataclasses import replace
 from functools import wraps
 
 from app.domain.diagram_merge import merge_diagrams, pages_of
+from app.domain.diagram_metadata import sanitize_diagram_metadata, sanitize_page_metadata
 from app.domain.ids import is_valid_id, new_id
 from app.domain.models import Document, DocumentMeta, DocumentVersion
 from app.domain.repository import DocumentRepository, VersionRepository
@@ -182,7 +183,8 @@ class DocumentService:
                 for end in ("source", "target")
             )
         ]
-        self._live[doc_id] = self._validate_diagram({"pages": pages})
+        root = {"metadata": current["metadata"]} if isinstance(current, dict) and current.get("metadata") else {}
+        self._live[doc_id] = self._validate_diagram({**root, "pages": pages})
         return deepcopy(page)
 
     @_serialized_write
@@ -322,11 +324,13 @@ class DocumentService:
                 nodes, edges = pg.get("nodes"), pg.get("edges")
                 if not isinstance(nodes, list) or not isinstance(edges, list):
                     raise InvalidDiagram("Each page needs 'nodes' and 'edges' as arrays.")
+                page_meta = sanitize_page_metadata(pg.get("metadata"))
                 pages.append({
                     "id": str(pg.get("id") or f"p{i}"),
                     "name": str(pg.get("name") or f"Page {i + 1}")[:80],
                     # Presentation visibility is durable page metadata.
                     **({"hidden": True} if pg.get("hidden") is True else {}),
+                    **({"metadata": page_meta} if page_meta else {}),
                     "nodes": nodes,
                     "edges": edges,
                 })
@@ -339,6 +343,11 @@ class DocumentService:
             if not isinstance(nodes, list) or not isinstance(edges, list):
                 raise InvalidDiagram("Diagram needs 'nodes' and 'edges' as arrays.")
             payload = {"nodes": nodes, "edges": edges}
+        # Optional semantic metadata on the diagram root (both shapes) — bounded
+        # and sanitized; an empty result is simply omitted.
+        root_meta = sanitize_diagram_metadata(diagram.get("metadata"))
+        if root_meta:
+            payload = {"metadata": root_meta, **payload}
         if len(json.dumps(payload)) > _MAX_DIAGRAM_BYTES:
             raise InvalidDiagram("Diagram is too large (1MB limit).")
         return payload

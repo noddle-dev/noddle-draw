@@ -87,12 +87,14 @@ id or the board URL (`{base}/d/{id}` or `/embed/{id}`). A URL on a different ori
 
 | Tool | readOnly | destructive | idempotent | openWorld | What it does |
 |---|---|---|---|---|---|
-| `get_board` | ✓ | | | ✗ | Name, url, `my_role` (`editor`/`viewer`), `updated_at`, a short-lived `edit_revision`, page summary and the LIVE diagram JSON (includes edits awaiting browser autosave). Optional `page_id` and `include_svg` (a `page_id` on a multi-page board returns `svg_note` instead of the wrong page's SVG) |
-| `create_board` | ✗ | ✗ | ✗ | ✗ | Only for an explicitly requested NEW board, with optional diagram JSON. Anyone with its url can edit it |
-| `update_board` | ✗ | ✓ | ✓ | ✗ | Send the WHOLE diagram back with `edit_revision` (or `expected_updated_at`): only the fields you changed merge with the live board. A version snapshot is kept. Returns `post_save_check` |
-| `clone_diagram` | ✗ | ✗ | ✗ | ✗ | Copy all/selected nodes of one page to the RIGHT on the same page (groups, edges, waypoints remapped) and return old→new id maps. The first step before revising a diagram |
-| `capture_board` | ✓ | | | ✗ | Render one saved page through the editor's own renderer and return an MCP `image/png` block. `expected_updated_at` makes a stale capture fail |
-| `lint_board` | ✓ | | | ✗ | Self-review: layout errors/warnings with ids and a fix each, plus edges routed through shapes/text (from the rendered routes) |
+| `read_board_summary` | ✓ | | | ✗ | **Read this first.** Geometry-free semantic graph: diagram/page `metadata`, `groups` (frames + members), `nodes` `{id,text,kind,group,meta}`, `flows` (`A --[HTTPS]--> B`) and an `edit_revision`. Legacy boards get groups/roles inferred from frames and shape kinds |
+| `get_board` | ✓ | | | ✗ | Name, url, `my_role` (`editor`/`viewer`), `updated_at`, diagram `metadata`, a short-lived `edit_revision`, page summary and the LIVE diagram JSON (includes edits awaiting browser autosave). Optional `page_id`, `compact` (drops default fields), `node_ids` (subset + their edges) and `include_svg` (a `page_id` on a multi-page board returns `svg_note` instead of the wrong page's SVG) |
+| `create_board` | ✗ | ✗ | ✗ | ✗ | Only for an explicitly requested NEW board, with optional diagram JSON and diagram `metadata` (`category` fills `metadata.category`). `category`/`palette`/`auto_fit`/`auto_layout` apply category colors and layout hygiene; `capture=true` returns the PNG + DOM lint in the same call. Anyone with its url can edit it |
+| `patch_board` | ✗ | ✗ | ✗ | ✗ | **Preferred write.** Small atomic ops (`add`/`update`/`delete` nodes and edges, `add_page`, `rename_page`, `set_metadata`) merged onto the live board with `edit_revision`, plus `metadata` / `page_metadata`. Same hygiene and `capture` / `capture_node_ids` options as `create_board`. Returns `post_save_check` |
+| `update_board` | ✗ | ✓ | ✓ | ✗ | Send the WHOLE diagram back with `edit_revision` (or `expected_updated_at`): only the fields you changed merge with the live board. A version snapshot is kept. Optional hygiene + `capture`. Returns `post_save_check` |
+| `clone_diagram` | ✗ | ✗ | ✗ | ✗ | Copy all/selected nodes of one page to the RIGHT on the same page (groups, edges, waypoints remapped) and return old→new id maps plus `clone_node_ids`. The first step before revising a diagram |
+| `capture_board` | ✓ | | | ✗ | Render one saved page through the editor's own renderer and return an MCP `image/png` block plus pixel-exact DOM `lint` (`include_lint`, default on). `node_ids` crops tightly around a clone/section at 2x. `expected_updated_at` makes a stale capture fail |
+| `lint_board` | ✓ | | | ✗ | Self-review without a PNG: layout errors/warnings with ids and a fix each, using browser-measured text boxes and the rendered edge routes when a renderer is available |
 | `join_board` | ✗ | ✗ | ✓ | ✗ | Show the agent (`NODDLE_AGENT_NAME`) in the board's live presence for ~5 min without writing |
 | `rename_board` | ✗ | ✗ | ✓ | ✗ | Rename |
 | `list_versions` | ✓ | | | ✗ | Version-history snapshots, newest first |
@@ -109,7 +111,24 @@ Diagram payloads are **pass-through**. The server checks only the envelope
 (`{pages:[{id,nodes,edges}]}` or legacy `{nodes,edges}`, with string ids). Node and edge
 fields are forwarded untouched, so new editor fields (e.g. the `freedraw` kind with
 `points`, or `curved` routing) work without a server update. See `DiagramNode` /
-`DiagramEdge` in `contracts/openapi.yaml`.
+`DiagramEdge` in `contracts/openapi.yaml`. On writes the MCP server itself may expand
+`style` / `role` shorthands into category colors and grow/separate the shapes you touched
+(`auto_fit` / `auto_layout`); every such change is listed in `auto_fixed`.
+
+**Semantic metadata (2.1.0).** Boards carry optional, bounded semantics at three levels —
+diagram `metadata` `{category, summary, domain, tags, owner, version, links, custom}`, page
+`metadata` `{category, summary, tags, notes, custom}` and node/edge `meta` (≤ 20 keys of
+primitives, e.g. `role`, `tech`, `layer`, `protocol`, `sla`). `patch_board` takes `metadata` /
+`page_metadata` or the op `{op:"set_metadata", metadata, page_id?}` (a key set to `null` is
+removed; `meta` on an `update` op merges key by key). The `role` styling shorthand is also kept
+as `meta.role`. The server sanitizes everything (`backend/app/domain/diagram_metadata.py`), and
+the editor shows it quietly (title-island popover, inspector "Semantics", a hover badge).
+
+**MCP Apps inline preview.** `capture_board`, `create_board`, `patch_board` and
+`read_board_summary` declare `_meta.ui.resourceUri = "ui://noddle/preview"`: a static,
+self-contained `text/html;profile=mcp-app` card (no CDN) that renders the PNG + metadata pushed
+by the host over `ui/notifications/tool-result`, fits/zooms/pans the image, asks the host to
+run `capture_board` itself when a result carries no PNG, and opens the board via `ui/open-link`.
 
 Errors:
 - **Bad arguments, API failures (400/403/404/413/422/429/503) and conflicts** come back as
@@ -124,6 +143,8 @@ Errors:
   because the API has no listing. `resources/templates/list` exposes
   `noddle://board/{doc_id}`, so a client can read any board by id. `resources/read`
   returns the same JSON as `get_board`. An unknown board returns `-32602`.
+  `noddle://style-guide` (markdown: category color maps, style presets, label rules) and
+  `ui://noddle/preview` (MCP Apps HTML) are static and always listed first.
 - **Prompts**:
   - `design_board(topic, notes?, doc_id?)`: without `doc_id`, generate → sanity-check →
     `create_board` → lint/capture → reply with the url. With `doc_id`, the revise-beside-the-
@@ -220,7 +241,7 @@ editor draws the Claude mark. Like every anonymous identity, the name is display
 
 ## Post-save check and lint
 
-Every `update_board` / `clone_diagram` result carries `post_save_check`:
+Every `patch_board` / `update_board` / `clone_diagram` / `create_board` result carries `post_save_check`:
 `manual_changes` (objects someone else added/removed/modified while you worked — never
 revert them silently) and `issues` on the pages you changed, each with `yours` (fix yours,
 report and ask about the rest). Lists are capped at 20 with `*_count` totals.
@@ -228,5 +249,8 @@ report and ask about the rest). Lists are capped at 20 with `*_count` totals.
 `lint_board {doc_id, page_id?, check_routes?}` uses the same detectors. **Errors**:
 `stray_shape`, `tiny_shape`, `duplicate`, `overlap`, `straddles_frame`, `text_overlap`,
 `dangling_edge`, `edge_crosses_shape`, `edge_crosses_text`. **Warnings**: `text_overflow`,
-`misaligned`, `empty_shape`, `orphan`, `empty_container`, `duplicate_edge`. Route checks
+`misaligned`, `empty_shape`, `orphan`, `empty_container`, `duplicate_edge`, `verbose_text`,
+`monochrome_board`. When the page was rendered (`capture=true`, `capture_board`,
+`lint_board`), text overflow/overlap use the browser-measured `<text>` boxes
+(`dom_verified: true`) instead of the font-width estimate. Route checks
 render each page (~2 s); without a renderer the result lists `routes_unchecked` + a `note`.

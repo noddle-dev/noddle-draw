@@ -460,6 +460,8 @@ NODE_FIELD_SAMPLES = {
     "z": 7,
     "points": [0.0, 0.0, 0.5, 1.0, 1.0, 0.5],
     "pen": {"type": "pen", "thinning": 0.5, "smoothing": 0.4, "taper": True, "softness": 0.0},
+    "meta": {"role": "database", "tech": "postgres", "replicas": 3, "pci": True,
+             "tags": ["core", "ledger"]},
 }
 EDGE_FIELD_SAMPLES = {
     "endHead": "circle",
@@ -472,6 +474,7 @@ EDGE_FIELD_SAMPLES = {
     "flowIntensity": "strong",
     "waypoints": [{"x": 10, "y": 20}],
     "z": 3,
+    "meta": {"protocol": "HTTPS", "sla": "99.9%", "async": False},
 }
 
 

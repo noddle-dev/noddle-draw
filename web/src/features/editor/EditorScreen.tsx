@@ -239,8 +239,9 @@ export function EditorScreen() {
     // Page add/delete/rename/duplicate lives in pagesStore, not diagramStore —
     // watch it too so structural page changes actually persist (a deleted page
     // used to reappear on reload).
+    // Board-level semantic metadata lives on the same store (root `metadata`).
     const unsubPages = usePagesStore.subscribe((s, prev) => {
-      if (s.pages !== prev.pages) kick();
+      if (s.pages !== prev.pages || s.metadata !== prev.metadata) kick();
     });
     // Flush a pending debounced save when the tab is hidden or reloaded — a
     // quick F5 within the 1.8s window would otherwise drop the last change

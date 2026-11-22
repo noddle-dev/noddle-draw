@@ -51,6 +51,9 @@ class CaptureBody(BaseModel):
 
     page_id: str | None = Field(default=None, max_length=128)
     expected_updated_at: float | None = Field(default=None, allow_inf_nan=False)
+    # Optional subset of node ids to crop tightly around (keeps a crisp 2x
+    # zoom on one section/cluster of a large page).
+    node_ids: list[str] | None = Field(default=None, max_length=1000)
 
 
 class CreateDocBody(BaseModel):

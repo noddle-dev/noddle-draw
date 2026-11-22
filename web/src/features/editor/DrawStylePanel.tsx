@@ -16,6 +16,10 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { groupSelected, groupState, ungroupSelected } from "../../state/grouping";
 import { arrangeSelection, flipSelection } from "../../state/arrange";
 import { DEFAULT_BRUSH, DRAW_STYLE_DEFAULTS, useEditorStore } from "../../state/editorStore";
+import { useState } from "react";
+import { useAppStore } from "../../state/appStore";
+import { hasSemanticMeta } from "../../editor-core/diagram/semantics";
+import { ObjectMetaEditor } from "./SemanticFields";
 
 // Palette lives in editor-core (mirrored by the backend AI default — board_palette.py).
 import { DEFAULT_CORNER_RADIUS, DEFAULT_STROKE_WIDTH, FILLS, STROKES, STYLE_PAIRS } from "../../editor-core/diagram/palette";
@@ -507,6 +511,39 @@ export function DrawStylePanel() {
             </button>
           </div>
         </>
+      )}
+      {firstSel && selCount === 1 && <QuickSemantics key={firstSel.id} id={firstSel.id} />}
+    </div>
+  );
+}
+
+/** One selected shape: a collapsed "Semantics" disclosure (role / description
+ * / tech / URL) so left-panel-only users can annotate without the right panel.
+ * Starts open only when the shape already carries semantics. */
+function QuickSemantics({ id }: { id: string }) {
+  const meta = useDiagramStore((s) => s.nodes[id]?.meta);
+  const readOnly = useEditorStore((s) => s.myRole === "viewer");
+  const [open, setOpen] = useState(() => hasSemanticMeta(meta));
+  return (
+    <div className={`ds-sem${open ? " open" : ""}`}>
+      <button type="button" className="ds-sem-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        Semantics
+        {!open && hasSemanticMeta(meta) && <span className="sem-dot" aria-hidden="true" />}
+      </button>
+      {open && (
+        <ObjectMetaEditor
+          kind="node"
+          compact
+          meta={meta}
+          readOnly={readOnly}
+          onChange={(next) => useDiagramStore.getState().updateNode(id, { meta: next })}
+          onMore={() => {
+            const app = useAppStore.getState();
+            app.setRightTab("props");
+            app.setSimplePanelOpen(true);
+          }}
+        />
       )}
     </div>
   );

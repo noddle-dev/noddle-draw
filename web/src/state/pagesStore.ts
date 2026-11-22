@@ -6,13 +6,24 @@
  * are cached here as plain {nodes, edges}. Switching pages snapshots the active
  * diagram into the cache and loads the target into diagramStore.
  *
- * Persistence shape (diagram sidecar): `{pages:[{id,name,nodes,edges}]}`.
+ * Persistence shape (diagram sidecar): `{metadata?, pages:[{id,name,metadata?,nodes,edges}]}`.
  * Legacy `{nodes,edges}` (single diagram) is wrapped as "Page 1" on load — full
- * backward compatibility.
+ * backward compatibility. The optional semantic `metadata` (diagram root and
+ * per page — see editor-core/diagram/types.ts) is carried through load → page
+ * switch/duplicate → save untouched so an agent's annotations are never dropped
+ * by a browser autosave; the quiet semantics UI (SemanticPopover / inspector)
+ * edits it through setDiagramMetadata / setPageMetadata, and EditorScreen's
+ * autosave watches both `metadata` and `pages`.
  */
 import { mergeRemotePage } from "./collabMerge";
 import { create } from "zustand";
-import type { DiagramEdge, DiagramNode } from "../editor-core/diagram";
+import type {
+  DiagramEdge,
+  DiagramMetadata,
+  DiagramNode,
+  PageMetadata,
+} from "../editor-core/diagram";
+import { mergeBoardMetadata } from "../editor-core/diagram/semantics";
 import { useDiagramStore } from "./diagramStore";
 import { onCollabPageState, setLocalPageId, suppressDiagramBroadcast } from "./collabStore";
 import { pauseHistory, switchHistoryPage } from "./diagramHistory";
@@ -47,12 +58,21 @@ export interface PageMeta {
   /** Hidden pages stay in the board (tab shown, dimmed) but are EXCLUDED from
    * presentation mode and deck/PNG export. Round-trips through the sidecar. */
   hidden?: boolean;
+  /** Semantic page metadata (category/summary/tags/notes/custom). */
+  metadata?: PageMetadata;
 }
 interface PageContent {
   nodes: DiagramNode[];
   edges: DiagramEdge[];
 }
 export interface Page extends PageMeta, PageContent {}
+
+/** A plain-object metadata value, deep-copied; anything else → undefined. */
+function copyMeta<T extends object>(v: unknown): T | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  if (Object.keys(v).length === 0) return undefined;
+  return JSON.parse(JSON.stringify(v)) as T;
+}
 
 function mintId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -64,6 +84,8 @@ function mintId(): string {
 interface PagesState {
   pages: PageMeta[];
   activeId: string | null;
+  /** Diagram-level semantic metadata (the sidecar root's `metadata`). */
+  metadata?: DiagramMetadata;
   /** nodes/edges of INACTIVE pages (active page's live copy is in diagramStore). */
   cache: Record<string, PageContent>;
 
@@ -71,7 +93,7 @@ interface PagesState {
    * ``docId`` keys the per-board "last active page" restore. */
   loadFromPayload: (payload: unknown, docId?: string | null) => void;
   /** Collect all pages (active from diagramStore) for save/collab. */
-  collect: () => { pages: Page[] };
+  collect: () => { metadata?: DiagramMetadata; pages: Page[] };
   /** True when the doc genuinely has >1 page (else callers can stay single). */
 
   switchPage: (id: string) => void;
@@ -79,6 +101,11 @@ interface PagesState {
   duplicatePage: (id: string) => void;
   renamePage: (id: string, name: string) => void;
   setPageHidden: (id: string, hidden: boolean) => void;
+  /** Merge a patch into the board's semantic metadata (empty values remove a
+   * key; `undefined` clears it all). Persists through the normal autosave. */
+  setDiagramMetadata: (patch: Partial<DiagramMetadata> | undefined) => void;
+  /** Same for one page's metadata. */
+  setPageMetadata: (pageId: string, patch: Partial<PageMetadata> | undefined) => void;
   deletePage: (id: string) => void;
   reset: () => void;
 }
@@ -109,6 +136,18 @@ function loadIntoDiagram(pageId: string, content: PageContent) {
   rememberActive(pageId);
 }
 
+/** A board that never touched the pages store (blank/new, never saved with a
+ * diagram) saves as legacy `{nodes,edges}` — which has no place for metadata.
+ * Adopt the live diagram as page "p1" (the same deterministic id the legacy
+ * wrap uses) so semantics persist. */
+function ensurePages(): void {
+  const s = usePagesStore.getState();
+  if (s.pages.length) return;
+  usePagesStore.setState({ pages: [{ id: "p1", name: "Page 1" }], activeId: "p1", cache: {} });
+  setLocalPageId("p1");
+  rememberActive("p1");
+}
+
 export const usePagesStore = create<PagesState>((set, get) => ({
   pages: [],
   activeId: null,
@@ -117,15 +156,25 @@ export const usePagesStore = create<PagesState>((set, get) => ({
   loadFromPayload(payload, docId = null) {
     currentDocId = docId;
     let pages: Page[] = [];
-    const p = payload as { pages?: Page[]; nodes?: DiagramNode[]; edges?: DiagramEdge[] } | null;
+    const p = payload as {
+      metadata?: unknown;
+      pages?: Page[];
+      nodes?: DiagramNode[];
+      edges?: DiagramEdge[];
+    } | null;
+    const metadata = copyMeta<DiagramMetadata>(p?.metadata);
     if (p && Array.isArray(p.pages) && p.pages.length) {
-      pages = p.pages.map((pg, i) => ({
-        id: pg.id || mintId(),
-        name: pg.name || `Page ${i + 1}`,
-        hidden: pg.hidden === true,
-        nodes: pg.nodes ?? [],
-        edges: pg.edges ?? [],
-      }));
+      pages = p.pages.map((pg, i) => {
+        const pageMeta = copyMeta<PageMetadata>(pg.metadata);
+        return {
+          id: pg.id || mintId(),
+          name: pg.name || `Page ${i + 1}`,
+          hidden: pg.hidden === true,
+          ...(pageMeta ? { metadata: pageMeta } : {}),
+          nodes: pg.nodes ?? [],
+          edges: pg.edges ?? [],
+        };
+      });
     } else if (p && (Array.isArray(p.nodes) || Array.isArray(p.edges))) {
       // DETERMINISTIC wrap id ("p1", matching the backend's `p{i}` default):
       // a random id here would differ per client, so two people opening the
@@ -141,18 +190,31 @@ export const usePagesStore = create<PagesState>((set, get) => ({
     const remembered = docId ? savedActive(docId) : null;
     const activeId =
       remembered && pages.some((pg) => pg.id === remembered) ? remembered : pages[0].id;
-    set({ pages: pages.map(({ id, name, hidden }) => ({ id, name, hidden })), activeId, cache });
+    set({
+      pages: pages.map(({ id, name, hidden, metadata: pm }) => ({
+        id,
+        name,
+        hidden,
+        ...(pm ? { metadata: pm } : {}),
+      })),
+      activeId,
+      cache,
+      metadata,
+    });
     loadIntoDiagram(activeId, cache[activeId]);
   },
 
   collect() {
-    const { pages, activeId, cache } = get();
+    const { pages, activeId, cache, metadata } = get();
     const merged = snapshotActive(activeId, cache);
+    const rootMeta = copyMeta<DiagramMetadata>(metadata);
     return {
+      ...(rootMeta ? { metadata: rootMeta } : {}),
       pages: pages.map((p) => ({
         id: p.id,
         name: p.name,
         ...(p.hidden ? { hidden: true } : {}),
+        ...(p.metadata ? { metadata: copyMeta<PageMetadata>(p.metadata) } : {}),
         nodes: merged[p.id]?.nodes ?? [],
         edges: merged[p.id]?.edges ?? [],
       })),
@@ -188,12 +250,19 @@ export const usePagesStore = create<PagesState>((set, get) => ({
     const src = snapped[id];
     if (!src) return;
     const newId = mintId();
-    const srcName = pages.find((p) => p.id === id)?.name ?? "Page";
+    const srcPage = pages.find((p) => p.id === id);
+    const srcName = srcPage?.name ?? "Page";
     const idx = pages.findIndex((p) => p.id === id);
     // deep-copy so the clone is independent
     const copy = JSON.parse(JSON.stringify(src)) as PageContent;
+    // The copy keeps the page's semantics (its own deep copy).
+    const pageMeta = copyMeta<PageMetadata>(srcPage?.metadata);
     const nextPages = [...pages];
-    nextPages.splice(idx + 1, 0, { id: newId, name: `${srcName} (copy)` });
+    nextPages.splice(idx + 1, 0, {
+      id: newId,
+      name: `${srcName} (copy)`,
+      ...(pageMeta ? { metadata: pageMeta } : {}),
+    });
     set({ pages: nextPages, cache: { ...snapped, [newId]: copy }, activeId: newId });
     loadIntoDiagram(newId, copy);
     pageSwitchHandler?.(activeId, newId);
@@ -211,6 +280,27 @@ export const usePagesStore = create<PagesState>((set, get) => ({
     set((s) => ({
       pages: s.pages.map((p) => (p.id === id ? { ...p, hidden } : p)),
     }));
+  },
+
+  setDiagramMetadata(patch) {
+    ensurePages();
+    set((s) => ({ metadata: mergeBoardMetadata<DiagramMetadata>(s.metadata, patch) }));
+  },
+
+  setPageMetadata(pageId, patch) {
+    ensurePages();
+    set((s) => {
+      if (!s.pages.some((p) => p.id === pageId)) return s;
+      return {
+        pages: s.pages.map((p) => {
+          if (p.id !== pageId) return p;
+          const metadata = mergeBoardMetadata<PageMetadata>(p.metadata, patch);
+          const { metadata: _old, ...rest } = p;
+          void _old;
+          return metadata ? { ...rest, metadata } : rest;
+        }),
+      };
+    });
   },
 
   deletePage(id) {
@@ -231,7 +321,7 @@ export const usePagesStore = create<PagesState>((set, get) => ({
   },
 
   reset() {
-    set({ pages: [], activeId: null, cache: {} });
+    set({ pages: [], activeId: null, cache: {}, metadata: undefined });
   },
 }));
 

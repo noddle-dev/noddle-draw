@@ -5,8 +5,10 @@
  *   • a diagram node  → diagramStore.updateNode (name/pos/size/fill/stroke/width)
  *   • a diagram edge  → diagramStore.updateEdge / setEdgeLabel (label/route/color)
  *   • an uploaded-SVG object → attribute edits via editorStore begin/commit
- *   • nothing selected → page settings (grid/snap real) + a diagram theme that
- *     recolours every node/edge.
+ *   • nothing selected → board & page semantics card + page settings (grid/snap
+ *     real) + a diagram theme that recolours every node/edge.
+ * Single nodes/edges also get a collapsible "Semantics" section (object
+ * `meta` — see SemanticFields.ObjectMetaEditor).
  */
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -22,6 +24,8 @@ import {
   EDGE_SWATCHES,
   THEMES,
 } from "./data";
+import { BoardSemanticsForm, ObjectMetaEditor } from "./SemanticFields";
+import { hasSemanticMeta } from "../../editor-core/diagram/semantics";
 
 // Partial: only the common kinds get a bespoke glyph/label; the rest fall back
 // (◆ / the kind name) — keeps this in sync-free with the expanding NodeKind set.
@@ -211,6 +215,7 @@ function NodeProps({ id }: { id: string }) {
   const updateNode = useDiagramStore((s) => s.updateNode);
   const setDiagramSelection = useDiagramStore((s) => s.setDiagramSelection);
   const setRightTab = useAppStore((s) => s.setRightTab);
+  const readOnly = useEditorStore((s) => s.myRole === "viewer");
   if (!node) return null;
   const isInk = node.kind === "freedraw";
 
@@ -259,6 +264,17 @@ function NodeProps({ id }: { id: string }) {
         <div className="prop-hint">Text overflows the shape — turn on Wrap text.</div>
       )}
 
+      {!isInk && (
+        <Section title="Semantics" defaultOpen={hasSemanticMeta(node.meta)}>
+          <ObjectMetaEditor
+            kind="node"
+            meta={node.meta}
+            readOnly={readOnly}
+            onChange={(meta) => updateNode(id, { meta })}
+          />
+        </Section>
+      )}
+
       <StyleHint />
 
       <div className="ask-claude" onClick={() => setRightTab("claude")}>
@@ -284,6 +300,7 @@ function EdgeProps({ id }: { id: string }) {
   const deleteSelected = useDiagramStore((s) => s.deleteSelectedDiagram);
   const setDiagramSelection = useDiagramStore((s) => s.setDiagramSelection);
   const setRightTab = useAppStore((s) => s.setRightTab);
+  const readOnly = useEditorStore((s) => s.myRole === "viewer");
   if (!edge) return null;
 
   return (
@@ -391,6 +408,17 @@ function EdgeProps({ id }: { id: string }) {
         value={endpointHead(edge.endHead, edge.endArrow)}
         onPick={(h) => updateEdge(id, { endHead: h, endArrow: h !== "none" })}
       />
+      </Section>
+
+      <Section title="Semantics" defaultOpen={hasSemanticMeta(edge.meta)}>
+        <ObjectMetaEditor
+          kind="edge"
+          meta={edge.meta}
+          readOnly={readOnly}
+          // Not the style-remembering wrapper: meta must never stick to the
+          // next drawn arrow.
+          onChange={(meta) => updateEdge0(id, { meta })}
+        />
       </Section>
 
       <button className="btn btn-danger btn-block" style={{ margin: "8px 0 14px" }} onClick={deleteSelected}>✕ Delete connector</button>
@@ -530,6 +558,8 @@ function PageSettings() {
         </div>
       </div>
 
+      <BoardSemanticsCard />
+
       <div className="props-label">Page</div>
       <div className="prop-row">
         <span className="lbl">Show grid</span>
@@ -584,6 +614,26 @@ function PageSettings() {
         <Kbd keys="Space drag" label="Pan the canvas" />
         <Kbd keys="⌘V" label="Paste an image" />
       </div>
+    </div>
+  );
+}
+
+/** Nothing selected: the board's semantic description, compact + collapsible
+ * (open by default only when something is already written). */
+function BoardSemanticsCard() {
+  const readOnly = useEditorStore((s) => s.myRole === "viewer");
+  const hasAny = usePagesStore(
+    (s) => !!s.metadata || !!s.pages.find((p) => p.id === s.activeId)?.metadata,
+  );
+  const [open, setOpen] = useState(hasAny);
+  return (
+    <div className={`sem-card${open ? " open" : ""}`}>
+      <button type="button" className="sem-card-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        Board &amp; page semantics
+        {!open && hasAny && <span className="sem-dot" aria-hidden="true" />}
+      </button>
+      {open && <BoardSemanticsForm readOnly={readOnly} />}
     </div>
   );
 }

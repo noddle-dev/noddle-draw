@@ -132,6 +132,44 @@ export type NodeStrokeDash = "solid" | "dashed" | "dotted";
  */
 export type NodeFontFamily = "sans" | "mono" | "serif";
 
+// ---- semantic metadata (optional, bounded — never affects rendering) --------
+// Lets an agent (MCP read_board_summary) understand a board in a few hundred
+// tokens without reading geometry. Backend mirror + bounds:
+// backend/app/domain/diagram_metadata.py (≤20 keys of ≤64 chars; values are
+// primitives or lists of ≤20 primitives — invalid entries are stripped).
+
+/** One primitive metadata value. */
+export type MetaValue = string | number | boolean;
+
+/** Free-form semantic tags on a node or edge: role, layer, tech, protocol,
+ * sla, owner, status, tags, url … */
+export type ObjectMeta = Record<string, MetaValue | MetaValue[]>;
+
+/** Board-level semantics, stored on the diagram root `{metadata?, pages}`. */
+export interface DiagramMetadata {
+  /** architecture | flowchart | data | org | timeline — or a custom value. */
+  category?: string;
+  /** One or two sentences: what the board explains. */
+  summary?: string;
+  /** Business/technical domain, e.g. payments, fraud, infra. */
+  domain?: string;
+  tags?: string[];
+  owner?: string;
+  version?: string;
+  /** http(s) links only. */
+  links?: Array<{ label: string; url: string }>;
+  custom?: ObjectMeta;
+}
+
+/** One page's semantics, stored on `pages[i].metadata`. */
+export interface PageMetadata {
+  category?: string;
+  summary?: string;
+  tags?: string[];
+  notes?: string;
+  custom?: ObjectMeta;
+}
+
 export interface DiagramNode {
   id: string;
   kind: NodeKind;
@@ -218,6 +256,8 @@ export interface DiagramNode {
    * above both. See DiagramLayer's paint-order sort.
    */
   z?: number;
+  /** Semantic tags (role, tech, layer, owner …) — data only, never rendered. */
+  meta?: ObjectMeta;
 }
 
 /**
@@ -311,6 +351,8 @@ export interface DiagramEdge {
    * nodes); a newly drawn arrow is z-stamped so it sits on top of shapes.
    */
   z?: number;
+  /** Semantic tags (protocol, sla, kind of flow …) — data only, never rendered. */
+  meta?: ObjectMeta;
 }
 
 /** Brush settings carried on a freedraw node (`node.pen`). All optional. */

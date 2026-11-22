@@ -87,7 +87,27 @@ There is no Python linter/formatter config checked in; match surrounding style.
 - `POST /api/documents/{id}/capture` renders one saved page to PNG via
   headless Chromium + `web/dist/capture.js` (built by `web/build-capture.mjs`
   from `features/diagram/capture.tsx`, offline, CSP-locked; also returns
-  `edge_routes` for MCP `lint_board`). No browser/bundle ⇒ 503.
+  `edge_routes` + browser-measured `text_metrics`/`edge_label_metrics` for the
+  MCP DOM lint; optional `node_ids` crops tightly ⇒ `cropped:true`). No
+  browser/bundle ⇒ 503.
+
+### Semantic metadata (MCP 2.1)
+- Three optional, bounded levels: diagram root `metadata`, page `metadata`,
+  node/edge `meta` (`types.ts` DiagramMetadata/PageMetadata/ObjectMeta;
+  sanitizers in `domain/diagram_metadata.py`, applied by `_validate_diagram`
+  and the AI normalizer; root metadata merges three-way key by key in
+  `diagram_merge`; `apply_live_page` keeps it). Never rendered on exports.
+- `pagesStore` carries both levels through load/switch/duplicate/save. Quiet
+  UI: title-island `SemanticPopover` (board + active page), inspector /
+  DrawStylePanel "Semantics" (`SemanticFields.tsx`), on-canvas
+  `SemanticBadge` (editor-only) — pure rules in `editor-core/diagram/semantics.ts`.
+- MCP (`mcp/noddle_mcp.py` 2.1.0, still anonymous/no tokens): `patch_board`
+  (atomic ops + `set_metadata`, category colors, auto_fit/auto_layout,
+  `capture=true` ⇒ PNG + DOM lint in one call), `read_board_summary`
+  (geometry-free semantic read), `noddle://style-guide`, and the MCP Apps
+  card `ui://noddle/preview` (`_meta.ui.resourceUri`). Every write still
+  sends `author_name` + `agent:true`. Tests: `test_mcp_v2.py`,
+  `test_diagram_metadata.py`.
 - Fonts are bundled OFL TTFs (`web/src/assets/fonts`, `shared/fonts.ts`) and
   embedded into SVG/PNG/GIF exports and captures.
 

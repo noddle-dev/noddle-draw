@@ -50,12 +50,23 @@ def _objects(base: list, desired: list, current: list, page: bool = False) -> li
     return list(now.values())
 
 
+# Diagram-ROOT keys that are not page content (a legacy ``{nodes,edges}``
+# sidecar may carry them too — they must never be wrapped into "Page 1").
+_ROOT_KEYS = ('metadata',)
+
+
 def pages_of(diagram: dict | None) -> list[dict]:
     if not diagram:
         return []
     if 'pages' in diagram:
         return deepcopy(diagram['pages'])
-    return [{'id': 'p1', 'name': 'Page 1', **deepcopy(diagram)}]
+    return [{'id': 'p1', 'name': 'Page 1',
+             **{k: deepcopy(v) for k, v in diagram.items() if k not in _ROOT_KEYS}}]
+
+
+def _root_metadata(diagram: dict | None) -> dict:
+    meta = diagram.get('metadata') if isinstance(diagram, dict) else None
+    return meta if isinstance(meta, dict) else {}
 
 
 def merge_diagrams(base: dict | None, desired: dict | None, current: dict | None) -> dict | None:
@@ -68,6 +79,10 @@ def merge_diagrams(base: dict | None, desired: dict | None, current: dict | None
             not isinstance(e.get(end), dict) or not e[end].get('nodeId') or e[end]['nodeId'] in ids
             for end in ('source', 'target')
         )]
+    # Diagram-level metadata merges key-by-key, three-way, exactly like an
+    # object's fields: a writer that never touched it keeps a peer's update.
+    metadata = _fields(_root_metadata(base), _root_metadata(desired), _root_metadata(current))
+    root = {'metadata': metadata} if metadata else {}
     if any(d and 'pages' in d for d in (base, desired, current)):
-        return {'pages': pages}
-    return {k: v for k, v in (pages[0] if pages else {}).items() if k not in ('id', 'name')}
+        return {**root, 'pages': pages}
+    return {**root, **{k: v for k, v in (pages[0] if pages else {}).items() if k not in ('id', 'name')}}
