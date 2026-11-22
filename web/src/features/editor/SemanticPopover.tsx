@@ -4,14 +4,64 @@
  *
  * Trigger: a subtle category pill + info mark when `metadata.category` is set,
  * else a lone doodle tag icon. Click → a popover anchored under the island
- * with the board summary / category / domain / tags and the active page's
- * summary / notes (BoardSemanticsForm). Closes on outside pointerdown or Esc.
- * Viewers see the same fields read-only.
+ * with two tabs:
+ *   • Overview (default) — the LIVE semantic read of the active page
+ *     (SemanticOverview: summary + computed overview, zones, flows), so a
+ *     board nobody annotated still explains itself; "Copy for AI" exports it
+ *     as Markdown.
+ *   • Edit metadata — the board summary / category / domain / tags and the
+ *     active page's summary / notes (BoardSemanticsForm).
+ * Closes on outside pointerdown or Esc. Viewers see the same fields read-only.
  */
 import { useEffect, useRef, useState } from "react";
 import { titleCase } from "../../editor-core/diagram/semantics";
 import { usePagesStore } from "../../state/pagesStore";
 import { BoardSemanticsForm } from "./SemanticFields";
+import { CopyForAIButton, SemanticOverview, useLiveSemanticSummary } from "./SemanticOverview";
+
+type SemTab = "overview" | "edit";
+
+/** Overview | Edit metadata segmented switch. */
+export function SemanticTabs({ tab, onTab, readOnly }: { tab: SemTab; onTab: (t: SemTab) => void; readOnly: boolean }) {
+  return (
+    <div className="sov-tabs" role="tablist" aria-label="Board semantics view">
+      <button type="button" role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "on" : ""} onClick={() => onTab("overview")}>
+        Overview
+      </button>
+      <button type="button" role="tab" aria-selected={tab === "edit"} className={tab === "edit" ? "on" : ""} onClick={() => onTab("edit")}>
+        {readOnly ? "Metadata" : "Edit metadata"}
+      </button>
+    </div>
+  );
+}
+
+/** The popover body — mounted only while open, so the live analysis never
+ * runs for a closed popover. */
+function SemanticPopoverBody({ readOnly, onClose }: { readOnly: boolean; onClose: () => void }) {
+  const [tab, setTab] = useState<SemTab>("overview");
+  const summary = useLiveSemanticSummary();
+  return (
+    <div className="sem-pop" role="dialog" aria-label="Board semantics">
+      <div className="sem-pop-head">
+        <span className="sem-pop-title">Board semantics</span>
+        {readOnly && <span className="sem-ro">view only</span>}
+        <CopyForAIButton summary={summary} />
+        <button type="button" className="sem-x" aria-label="Close" onClick={onClose}>×</button>
+      </div>
+      <SemanticTabs tab={tab} onTab={setTab} readOnly={readOnly} />
+      <div className="sem-pop-body">
+        {tab === "overview" ? (
+          <SemanticOverview summary={summary} />
+        ) : (
+          <>
+            <p className="sem-pop-sub">Helps teammates and AI agents understand what this board is about. Never drawn on the canvas.</p>
+            <BoardSemanticsForm readOnly={readOnly} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /** Doodle tag (no category yet) — rough single stroke, currentColor. */
 function TagDoodle() {
@@ -83,17 +133,7 @@ export function SemanticTrigger({ readOnly }: { readOnly: boolean }) {
           </>
         )}
       </button>
-      {open && (
-        <div className="sem-pop" role="dialog" aria-label="Board semantics">
-          <div className="sem-pop-head">
-            <span className="sem-pop-title">Board semantics</span>
-            {readOnly && <span className="sem-ro">view only</span>}
-            <button type="button" className="sem-x" aria-label="Close" onClick={() => setOpen(false)}>×</button>
-          </div>
-          <p className="sem-pop-sub">Helps teammates and AI agents understand what this board is about. Never drawn on the canvas.</p>
-          <BoardSemanticsForm readOnly={readOnly} />
-        </div>
-      )}
+      {open && <SemanticPopoverBody readOnly={readOnly} onClose={() => setOpen(false)} />}
     </div>
   );
 }

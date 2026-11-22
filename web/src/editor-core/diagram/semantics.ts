@@ -221,3 +221,24 @@ export function summarizeMeta(meta: ObjectMeta | undefined): SemanticSummary {
   }
   return out;
 }
+
+// The live whole-page analyzer (zones / components / flows / overview) lives
+// in its own module to keep this file small; re-exported here as the one
+// public entry point for semantic helpers.
+export {
+  buildPageSemanticSummary,
+  flowText,
+  iconLabel,
+  roleFromIcon,
+  oneLine,
+} from "./semanticSummary";
+export { toSemanticMarkdown } from "./semanticNarrative";
+export type {
+  PageSemanticSummary,
+  SemanticComponent,
+  SemanticFlow,
+  SemanticGroup,
+  RoleSource,
+  IconInfo,
+  SemanticSummaryOptions,
+} from "./semanticSummary";
