@@ -5,7 +5,7 @@ Handlers are thin: they validate/parse input, call the injected
 DTOs. noddle is anonymous-only — the board URL is the capability, enforced
 through ``services.auth.can``:
 
-    action "view" → GET one / export / versions
+    action "view" → GET one / export / versions / capture / agent presence
     action "edit" → PUT payload, rename
 
 There is no board listing (link access ≠ discovery — the client keeps its own
@@ -14,15 +14,18 @@ has no owner who could be trusted with either.
 """
 from __future__ import annotations
 
+import anyio
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from app.api.schemas import (
     BLANK_BOARD_SVG,
+    CaptureBody,
     CreateDocBody,
     DocMeta,
     DocumentOut,
     PatchDocBody,
+    PresenceBody,
     SaveBody,
 )
 from app.domain.models import DocumentMeta
@@ -41,6 +44,7 @@ async def _read_capped(file: UploadFile) -> str:
         raise HTTPException(status_code=413, detail="File is too large (8MB limit).")
     return raw.decode("utf-8", errors="replace")
 from app.services.documents import (
+    DocumentConflict,
     DocumentNotFound,
     DocumentService,
     InvalidDiagram,
@@ -161,7 +165,8 @@ def get_document(
     service: DocumentService = Depends(get_service),
 ) -> DocumentOut:
     try:
-        doc = service.get(doc_id)
+        # Live view: includes peers' unsaved edits while the board is open.
+        doc = service.get_live(doc_id)
     except DocumentNotFound:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     _guard("view", doc.meta)
@@ -182,23 +187,36 @@ def save_document(
     service: DocumentService = Depends(get_service),
 ) -> DocMeta:
     try:
-        existing = service.get(doc_id)
+        existing = service.get_live(doc_id)
     except DocumentNotFound:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     _guard("edit", existing.meta)
     # Version-history attribution: the client sends its localStorage identity.
     author = (body.author_name or "").strip()[:40]
+    kwargs: dict = {"author_name": author, "expected_updated_at": body.expected_updated_at}
+    if "base_diagram" in body.model_fields_set:
+        kwargs["base_diagram"] = body.base_diagram
+    if "diagram" in body.model_fields_set:
+        kwargs["diagram"] = body.diagram
+    # else: legacy clients that send svg only → keep the stored diagram
     try:
-        if "diagram" in body.model_fields_set:
-            meta = service.save(
-                doc_id, body.svg, diagram=body.diagram, author_name=author
-            )
-        else:  # legacy clients that send svg only → keep the stored diagram
-            meta = service.save(doc_id, body.svg, author_name=author)
+        meta = service.save(doc_id, body.svg, **kwargs)
+    except DocumentConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except InvalidSvg as e:
         raise HTTPException(status_code=400, detail=str(e))
     except InvalidDiagram as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Sync HTTP/MCP writes to live viewers, including removals and other pages.
+    from app.api.collab import publish_document_save
+
+    try:
+        anyio.from_thread.run(
+            publish_document_save, doc_id, existing.diagram,
+            service.get_live(doc_id).diagram, author, body.agent,
+        )
+    except RuntimeError:
+        pass  # direct synchronous service/API use outside an ASGI worker
     return DocMeta.from_domain(meta)
 
 
@@ -291,3 +309,86 @@ def get_version(
         "svg": v.svg,
         "diagram": v.diagram,
     }
+
+
+# ---- agents: live presence + PNG capture ---------------------------------------
+
+
+@router.post("/{doc_id}/presence")
+def join_document(
+    doc_id: str,
+    body: PresenceBody,
+    service: DocumentService = Depends(get_service),
+) -> dict:
+    """MCP ``join_board``: an agent announces itself to open editors (shown in
+    presence under its own name — and the Claude mark when it is Claude)
+    without writing anything. People join over the WebSocket instead."""
+    try:
+        doc = service.get(doc_id)
+    except DocumentNotFound:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+    _guard("view", doc.meta)
+    name = " ".join(body.name.split())[:40]
+    if not name:
+        raise HTTPException(status_code=422, detail="Give the agent a display name.")
+    client_id = (body.client_id or "").strip() or None
+    from app.api.collab import AGENT_JOIN_TTL, agent_presence, announce_agent
+
+    try:
+        live = anyio.from_thread.run(announce_agent, doc_id, name, client_id)
+    except RuntimeError:
+        live = False  # direct synchronous service/API use outside an ASGI worker
+    return {"id": doc_id, "joined_as": agent_presence(name), "live_viewers": live,
+            "visible_for_seconds": AGENT_JOIN_TTL if live else 0}
+
+
+_MAX_CAPTURE_OBJECTS = 1500
+
+
+@router.post("/{doc_id}/capture")
+def capture_document(
+    doc_id: str,
+    body: CaptureBody,
+    service: DocumentService = Depends(get_service),
+) -> dict:
+    """Render one SAVED page through the editor's own React renderer (headless
+    Chromium, offline, CSP-locked) and return a PNG — visual evidence for
+    agents. 503 when the renderer isn't installed on this instance."""
+    from app.services import diagram_capture
+
+    try:
+        doc = service.get(doc_id)
+    except DocumentNotFound:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND) from None
+    _guard("view", doc.meta)
+    if body.expected_updated_at is not None and abs(doc.meta.updated_at - body.expected_updated_at) > 1e-6:
+        raise HTTPException(status_code=409, detail="The board changed. Read it again before capture.")
+    if not doc.diagram:
+        raise HTTPException(status_code=422, detail="This board has no editable diagram to capture.")
+    pages = doc.diagram.get("pages") or [doc.diagram]
+    if body.page_id is None and len(pages) != 1:
+        raise HTTPException(status_code=422, detail="Choose page_id for a multi-page board.")
+    page = (
+        next((p for p in pages if p.get("id", "p1") == body.page_id), None)
+        if body.page_id else pages[0]
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="Page not found.")
+    if len(page.get("nodes", [])) + len(page.get("edges", [])) > _MAX_CAPTURE_OBJECTS:
+        raise HTTPException(
+            status_code=422, detail="This page is too large to capture. Split it into smaller pages."
+        )
+    try:
+        image = diagram_capture.capture_diagram(page)
+    except diagram_capture.CaptureUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    try:
+        current = service.get(doc_id)
+    except DocumentNotFound:
+        raise HTTPException(status_code=409, detail="The board was removed during capture.") from None
+    if current.meta.updated_at != doc.meta.updated_at:
+        raise HTTPException(
+            status_code=409, detail="The board changed during capture. Capture the new revision."
+        )
+    return {**image, "id": doc_id, "page_id": page.get("id", "p1"),
+            "updated_at": doc.meta.updated_at, "scope": "diagram_page"}

@@ -10,6 +10,10 @@ import type { Artboard, Camera, Point } from "./types";
 
 export const MIN_ZOOM = 0.02;
 export const MAX_ZOOM = 64;
+/** Twice the previous wheel/pinch sensitivity and logarithmic click/key step. */
+export const WHEEL_ZOOM_SPEED = 0.006;
+export const ZOOM_BUTTON_STEP = 1.25 ** 2;
+export const ZOOM_KEY_STEP = 1.2 ** 2;
 
 const clampZoom = (z: number): number =>
   Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));

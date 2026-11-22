@@ -10,6 +10,7 @@
  *   • join/leave the document's live-collab room on docId change and stream
  *     the local pointer as a cursor (content coords).
  */
+import { isApplyingRemote } from "../../state/collabStore";
 import { useEffect, useRef, useState } from "react";
 import { Canvas } from "../canvas";
 import { screenToContent } from "../../editor-core";
@@ -18,6 +19,7 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { useAppStore } from "../../state/appStore";
 import { startDiagramHistory } from "../../state/diagramHistory";
 import { ContextMenu, type CtxMenuState } from "./ContextMenu";
+import { PresentHud } from "./PresentHud";
 import { PageBar } from "./PageBar";
 import { connectCollab, disconnectCollab, sendCursor } from "../../state/collabStore";
 import { rememberBoard } from "../../state/appStore";
@@ -100,30 +102,6 @@ function BoardNotFound() {
   );
 }
 
-/** Presentation HUD: page x/y + arrows + exit (chrome is CSS-hidden). */
-function PresentHud() {
-  const pages = usePagesStore((s) => s.pages);
-  const activeId = usePagesStore((s) => s.activeId);
-  const switchPage = usePagesStore((s) => s.switchPage);
-  const setPresenting = useAppStore((s) => s.setPresenting);
-  // Slides = VISIBLE pages only; hidden pages are skipped in present mode.
-  const slides = pages.filter((p) => !p.hidden);
-  const idx = Math.max(0, slides.findIndex((p) => p.id === activeId));
-  const goto = (i: number) => {
-    if (i >= 0 && i < slides.length) switchPage(slides[i].id);
-  };
-  return (
-    <div className="present-hud">
-      <button onClick={() => goto(idx - 1)} disabled={idx <= 0}>←</button>
-      <span className="pg">
-        {slides[idx]?.name ?? ""} · {idx + 1}/{Math.max(1, slides.length)}
-      </span>
-      <button onClick={() => goto(idx + 1)} disabled={idx >= slides.length - 1}>→</button>
-      <button className="exit" onClick={() => setPresenting(false)}>✕ Exit</button>
-    </div>
-  );
-}
-
 export function EditorScreen() {
   const refs = useEditorStore((s) => s.refs);
   const docId = useEditorStore((s) => s.docId);
@@ -139,53 +117,6 @@ export function EditorScreen() {
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const notFound = useEditorStore((s) => s.notFound);
 
-  // Presentation mode: fullscreen (best-effort) + ←/→ page nav + Esc exits.
-  useEffect(() => {
-    if (!presenting) return;
-    void document.documentElement.requestFullscreen?.().catch(() => {});
-    // If the active page is hidden when presentation starts, jump to the first
-    // visible slide so we never present a hidden page.
-    {
-      const ps = usePagesStore.getState();
-      const active = ps.pages.find((p) => p.id === ps.activeId);
-      if (active?.hidden) {
-        const firstVisible = ps.pages.find((p) => !p.hidden);
-        if (firstVisible) ps.switchPage(firstVisible.id);
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      const ps = usePagesStore.getState();
-      // Navigate VISIBLE pages only — hidden pages are skipped as slides.
-      const slides = ps.pages.filter((p) => !p.hidden);
-      const idx = slides.findIndex((p) => p.id === ps.activeId);
-      if (e.key === "ArrowRight" && idx < slides.length - 1) {
-        ps.switchPage(slides[idx + 1].id);
-      } else if (e.key === "ArrowLeft" && idx > 0) {
-        ps.switchPage(slides[idx - 1].id);
-      } else if (e.key === "Escape") {
-        useAppStore.getState().setPresenting(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-    };
-  }, [presenting]);
-
-  // Present auto-fit: entering present mode and every slide switch open the
-  // page FITTED — the presenter's pan/zoom on one slide must never leak into
-  // the next. Double-rAF so the freshly switched page's layer has painted
-  // (same two-frame trick as the deck exporter).
-  const activePageId = usePagesStore((s) => s.activeId);
-  useEffect(() => {
-    if (!presenting) return;
-    const raf = requestAnimationFrame(() =>
-      requestAnimationFrame(() => useEditorStore.getState().fitToView()),
-    );
-    return () => cancelAnimationFrame(raf);
-  }, [presenting, activePageId]);
-
   // Start diagram-layer undo/redo checkpointing (idempotent).
   useEffect(startDiagramHistory, []);
 
@@ -195,6 +126,7 @@ export function EditorScreen() {
     if (!refs) return;
     const host = refs.host;
     const onCtx = (e: MouseEvent) => {
+      if (useAppStore.getState().presenting) { e.preventDefault(); return; }
       const target = e.target as Element;
       const nodeG = target.closest("[data-diagram-node]");
       const edgeG = target.closest("[data-diagram-edge]");
@@ -262,6 +194,7 @@ export function EditorScreen() {
   // PASTE image (Cmd/Ctrl+V) → embed onto the board as an editable <image>.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
+      if (useAppStore.getState().presenting) return;
       const a = document.activeElement as HTMLElement | null;
       if (
         a &&
@@ -297,7 +230,7 @@ export function EditorScreen() {
       if (s.nodes !== prev.nodes || s.edges !== prev.edges) {
         // Grow the white page to contain shapes dragged past its edge.
         if (s.nodes !== prev.nodes) useEditorStore.getState().ensureArtboardFits();
-        kick();
+        if (!isApplyingRemote()) kick();
       }
     });
     const unsubContent = useEditorStore.subscribe((s, prev) => {
@@ -345,8 +278,8 @@ export function EditorScreen() {
         <div className="editor-canvas">
           <Canvas />
           <CanvasCollab />
-          <CommentsLayer />
-          {ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
+          {!presenting && <CommentsLayer />}
+          {!presenting && ctxMenu && <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} />}
           <PageBar />
         </div>
       </div>

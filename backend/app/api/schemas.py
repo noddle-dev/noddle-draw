@@ -5,7 +5,7 @@ evolve independently.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.domain.models import Document, DocumentMeta
 
@@ -21,11 +21,36 @@ class SaveBody(BaseModel):
 
     ``diagram`` semantics: omitted → keep stored; null → clear; object → replace.
     ``author_name`` attributes the version snapshot (client-side identity).
+    ``base_diagram`` (the diagram this client last read) makes the save a
+    3-way merge onto the live board — concurrent edits by others survive.
+    ``expected_updated_at`` (without a base) fails the save with 409 when the
+    board changed since the caller read it. ``agent`` marks an MCP/AI agent
+    write: the author is shown in live presence as an agent.
     """
 
     svg: str
     diagram: dict | None = None
     author_name: str | None = None
+    base_diagram: dict | None = None
+    expected_updated_at: float | None = Field(default=None, allow_inf_nan=False)
+    agent: bool = False
+
+
+class PresenceBody(BaseModel):
+    """POST /api/documents/{id}/presence — an agent (MCP ``join_board``)
+    announces itself to everyone who has the board open. Humans join over
+    the WebSocket instead."""
+
+    name: str = Field(min_length=1, max_length=40)
+    client_id: str | None = Field(default=None, max_length=64)
+
+
+class CaptureBody(BaseModel):
+    """POST /api/documents/{id}/capture — render one saved page to PNG.
+    ``expected_updated_at`` omitted ⇒ capture whatever is saved now."""
+
+    page_id: str | None = Field(default=None, max_length=128)
+    expected_updated_at: float | None = Field(default=None, allow_inf_nan=False)
 
 
 class CreateDocBody(BaseModel):

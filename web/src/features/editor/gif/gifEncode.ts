@@ -194,7 +194,7 @@ function lzw(minCodeSize: number, indices: Uint8Array, out: ByteBuf) {
   const eoiCode = clearCode + 1;
 
   let codeSize = minCodeSize + 1;
-  let dict = new Map<string, number>();
+  let dict = new Map<number, number>();
   let next = eoiCode + 1;
   const reset = () => {
     dict = new Map();
@@ -227,17 +227,18 @@ function lzw(minCodeSize: number, indices: Uint8Array, out: ByteBuf) {
   emit(clearCode);
   reset();
 
-  let prev = String(indices[0]);
+  // A sequence is represented by its dictionary code + next byte. Numeric
+  // keys avoid rebuilding/hashing ever longer strings for large flat fills.
+  let prev = indices[0];
   for (let i = 1; i < indices.length; i++) {
     const k = indices[i];
-    const joint = prev + "," + k;
-    if (dict.has(joint)) {
-      prev = joint;
+    const joint = (prev << 8) | k;
+    const found = dict.get(joint);
+    if (found !== undefined) {
+      prev = found;
       continue;
     }
-    // output code for prev
-    const prevCode = prev.includes(",") ? dict.get(prev)! : Number(prev);
-    emit(prevCode);
+    emit(prev);
     dict.set(joint, next++);
     if (next === (1 << codeSize) + 1) {
       if (codeSize < 12) codeSize++;
@@ -246,10 +247,9 @@ function lzw(minCodeSize: number, indices: Uint8Array, out: ByteBuf) {
         reset();
       }
     }
-    prev = String(k);
+    prev = k;
   }
-  const lastCode = prev.includes(",") ? dict.get(prev)! : Number(prev);
-  emit(lastCode);
+  emit(prev);
   emit(eoiCode);
   if (curBits > 0) {
     block[blockLen++] = cur & 0xff;
@@ -259,6 +259,53 @@ function lzw(minCodeSize: number, indices: Uint8Array, out: ByteBuf) {
   out.byte(0); // block terminator
 }
 
+/** Incremental writer: quantize and compress each frame before accepting more.
+ * Only compressed bytes survive between frames, rather than full index maps. */
+export class GifEncoder {
+  private out = new ByteBuf();
+
+  constructor(private width: number, private height: number, loopForever = true) {
+    const out = this.out;
+    out.str("GIF89a");
+    out.u16(width);
+    out.u16(height);
+    out.byte(0x70); // no global color table, 8-bit color resolution
+    out.byte(0);
+    out.byte(0);
+    if (loopForever) {
+      out.bytes([0x21, 0xff, 0x0b]);
+      out.str("NETSCAPE2.0");
+      out.bytes([0x03, 0x01, 0x00, 0x00, 0x00]);
+    }
+  }
+
+  addFrame(f: IndexedFrame): void {
+    const out = this.out;
+    let bits = 1;
+    while (1 << bits < f.palette.length) bits++;
+    const padded = 1 << bits;
+    const delay = Math.max(2, Math.round(f.delayMs / 10));
+    out.bytes([0x21, 0xf9, 0x04, 0x04]);
+    out.u16(delay);
+    out.bytes([0x00, 0x00]);
+    out.byte(0x2c);
+    out.u16(0);
+    out.u16(0);
+    out.u16(this.width);
+    out.u16(this.height);
+    out.byte(0x80 | (bits - 1));
+    for (let i = 0; i < padded; i++) {
+      out.bytes(f.palette[i] ?? [0, 0, 0]);
+    }
+    lzw(Math.max(2, bits), f.indices, out);
+  }
+
+  finish(): Uint8Array {
+    this.out.byte(0x3b);
+    return this.out.out();
+  }
+}
+
 /** Encode frames (per-frame local palettes) into an animated GIF89a. */
 export function encodeGif(
   width: number,
@@ -266,50 +313,7 @@ export function encodeGif(
   frames: IndexedFrame[],
   loopForever = true,
 ): Uint8Array {
-  const out = new ByteBuf();
-  out.str("GIF89a");
-  // logical screen descriptor — no global color table
-  out.u16(width);
-  out.u16(height);
-  out.byte(0x70); // no GCT, 8-bit color resolution
-  out.byte(0); // bg color
-  out.byte(0); // aspect
-
-  if (loopForever && frames.length > 1) {
-    // Netscape application extension: loop forever
-    out.bytes([0x21, 0xff, 0x0b]);
-    out.str("NETSCAPE2.0");
-    out.bytes([0x03, 0x01, 0x00, 0x00, 0x00]);
-  }
-
-  for (const f of frames) {
-    // pad palette to a power of two ≥ 2
-    let bits = 1;
-    while (1 << bits < f.palette.length) bits++;
-    bits = Math.max(bits, 1);
-    const padded = 1 << bits;
-
-    // graphics control extension (delay in centiseconds)
-    const delay = Math.max(2, Math.round(f.delayMs / 10)); // <20ms is ignored by browsers
-    out.bytes([0x21, 0xf9, 0x04, 0x04]); // disposal: do not dispose
-    out.u16(delay);
-    out.bytes([0x00, 0x00]);
-
-    // image descriptor + local color table
-    out.byte(0x2c);
-    out.u16(0);
-    out.u16(0);
-    out.u16(width);
-    out.u16(height);
-    out.byte(0x80 | (bits - 1)); // local color table flag + size
-    for (let i = 0; i < padded; i++) {
-      const [r, g, b] = f.palette[i] ?? [0, 0, 0];
-      out.bytes([r, g, b]);
-    }
-
-    lzw(Math.max(2, bits), f.indices, out);
-  }
-
-  out.byte(0x3b); // trailer
-  return out.out();
+  const encoder = new GifEncoder(width, height, loopForever && frames.length > 1);
+  for (const frame of frames) encoder.addFrame(frame);
+  return encoder.finish();
 }

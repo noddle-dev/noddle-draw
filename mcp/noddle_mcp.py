@@ -33,20 +33,25 @@ Exit codes: 0 = stdin closed (normal shutdown), 2 = bad configuration.
 from __future__ import annotations
 
 import base64
+import copy
 import json
+import math
 import os
 import re
 import sys
 import threading
+import time
 import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 DEFAULT_BASE_URL = "https://draw.noddle.dev"
 
@@ -60,11 +65,29 @@ SERVER_INFO = {
 INSTRUCTIONS = (
     "noddle boards are editable diagrams: {pages:[{id,name,nodes,edges}]}. Boards are "
     "anonymous: a board id (12 hex chars) or its URL ({base}/d/{id}) is all you need, and "
-    "anyone holding the link can open it. Read with get_board, edit the JSON, then write the "
-    "WHOLE diagram back with update_board (pass expected_updated_at from get_board to avoid "
-    "clobbering a collaborator). For a styled first draft from prose or Mermaid use "
-    "generate_diagram, then create_board/update_board. Never send customer PII, credentials "
-    "or account numbers through these tools."
+    "anyone holding the link can open it. "
+    "To see what a board looks like, call capture_board (one page -> PNG) rather than dumping "
+    "get_board JSON. When you start working on a board people may have open, call join_board so "
+    "they see you in presence. When editing an existing board, NEVER create a new board by "
+    "default or overwrite the original diagram. Read get_board, then clone_diagram to place an "
+    "editable copy to the RIGHT on the SAME page for one-to-one before/after comparison. Edit only "
+    "the returned clone IDs with update_board, preserving originals and other pages; pass "
+    "edit_revision and expected_updated_at from get_board on every write. People may keep the "
+    "board open: your changed fields merge with their live work. After each change call "
+    "capture_board with that saved revision and page_id. Read post_save_check after every write: "
+    "report manual_changes (people's edits merged into yours), fix every issue marked yours=true "
+    "and ask about the rest. Self-review is mandatory: run lint_board before editing (know what "
+    "was already wrong) and after (zero errors on what you drew: no leftover/stray or duplicate "
+    "shapes, no overlaps, nothing across a frame border, no text on text, no dangling edges), "
+    "then inspect the returned PNG for text, connectors, overlap, clipping and correctness. Fix "
+    "the clone and capture again if needed. A JSON review is NOT visual validation. If capture "
+    "fails or you cannot see images, say validation is incomplete. Show the comparison, then ASK "
+    "whether to keep both, replace the original, or move the revision into a new board. Do not "
+    "remove originals or create a separate board without that choice. Without board context, "
+    "ask the user for the board link (there is no board listing) or whether to create a new "
+    "board; create_board is for an explicitly requested new board only. generate_diagram drafts "
+    "JSON; it does not save. Never send customer PII, credentials or account numbers through "
+    "these tools."
 )
 
 MODERN_VERSIONS = ("2026-07-28",)
@@ -531,7 +554,14 @@ def summarize_board(b: Backend, doc_id: str, doc: Dict[str, Any], page_id: Optio
         "diagram": diagram,
     }
     if include_svg:
-        out["svg"] = doc.get("svg")
+        # The stored preview SVG is ONE flattened page (whichever was saved
+        # last), so for a page_id on a multi-page board it would silently be
+        # the wrong picture — point at capture_board instead.
+        if page_id is not None and len(pages) > 1:
+            out["svg_note"] = ("The stored preview SVG covers one page only and may not be this one; "
+                               "call capture_board with this page_id for its image.")
+        else:
+            out["svg"] = doc.get("svg")
     return out
 
 
@@ -566,10 +596,13 @@ BOARD_OUT = {
                     "description": "viewer ⇒ the link is view-only; writes will fail."},
         "updated_at": {"type": ["number", "null"],
                        "description": "Pass to update_board.expected_updated_at."},
+        "edit_revision": {"type": "string",
+                          "description": "Read-base token for a collaborative update_board."},
         "link_policy": {"type": ["string", "null"]},
         "pages": {"type": "array", "items": PAGE_SUMMARY},
         "diagram": DIAGRAM_OUT,
         "svg": {"type": ["string", "null"]},
+        "svg_note": {"type": "string"},
     },
     "required": ["id", "name", "url", "pages", "diagram"],
 }
@@ -577,6 +610,17 @@ REF_OUT = {
     "type": "object",
     "properties": {"id": {"type": "string"}, "name": {"type": ["string", "null"]},
                    "url": {"type": "string"}, "updated_at": {"type": ["number", "null"]}},
+    "required": ["id", "url"],
+}
+WRITE_OUT = {
+    "type": "object",
+    "properties": {**REF_OUT["properties"], "post_save_check": {
+        "type": "object",
+        "description": "manual_changes = collaborators' edits merged into your save; issues = "
+                       "overlaps / empty shapes / dangling edges on the pages you changed.",
+        "properties": {"manual_changes": {"type": "array"}, "manual_change_count": {"type": "integer"},
+                       "issues": {"type": "array"}, "issue_count": {"type": "integer"},
+                       "error_count": {"type": "integer"}, "next_step": {"type": "string"}}}},
     "required": ["id", "url"],
 }
 COMMENTS_OUT = {
@@ -601,10 +645,59 @@ def _ref(b: Backend, doc_id: str, meta: Dict[str, Any], fallback_name: Any) -> D
     return {"id": doc_id, "name": name, "url": b.board_url(doc_id), "updated_at": meta.get("updated_at")}
 
 
+# ---- read bases (edit_revision) -----------------------------------------------------
+# What get_board returned, kept briefly in THIS process so update_board can send
+# it as base_diagram: the server then 3-way merges only the agent's changes onto
+# the live board, even while people autosave it. noddle draw has no tokens, so
+# a base is bound to the backend it was read through (origin + agent name).
+_READ_BASES: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_READ_LOCK = threading.Lock()
+_READ_TTL_S = 600.0
+_READ_CAP = 12
+
+
+def _identity(b: Backend) -> str:
+    return getattr(b, "read_identity", None) or f"{b.base_url}|{b.agent_name}"
+
+
+def _remember(b: Backend, doc_id: str, updated: Any, diagram: Any) -> str:
+    revision = uuid.uuid4().hex
+    with _READ_LOCK:
+        now = time.monotonic()
+        for key in list(_READ_BASES):
+            if now - _READ_BASES[key]["at"] > _READ_TTL_S:
+                del _READ_BASES[key]
+        _READ_BASES[revision] = {"identity": _identity(b), "doc_id": doc_id, "updated_at": updated,
+                                 "diagram": copy.deepcopy(diagram), "at": now}
+        while len(_READ_BASES) > _READ_CAP:
+            _READ_BASES.popitem(last=False)
+    return revision
+
+
+def _read_base(b: Backend, doc_id: str, a: Dict[str, Any]) -> Tuple[bool, Any]:
+    """(True, base) for the edit_revision given — or, without one, the newest
+    read of this board at ``expected_updated_at``. (False, None) ⇒ no base."""
+    revision = a.get("edit_revision")
+    with _READ_LOCK:
+        items = ([_READ_BASES.get(revision)] if revision
+                 else [v for _, v in reversed(list(_READ_BASES.items()))])
+        for item in items:
+            if (item and item["identity"] == _identity(b) and item["doc_id"] == doc_id
+                    and time.monotonic() - item["at"] < _READ_TTL_S):
+                if revision or item["updated_at"] == a.get("expected_updated_at"):
+                    return True, copy.deepcopy(item["diagram"])
+    if revision:
+        raise ToolError("The edit revision expired. Call get_board and reapply your change.")
+    return False, None
+
+
 def t_get_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
     doc_id = resolve_doc_id(b, a["doc_id"])
     doc = b.call("GET", f"/api/documents/{doc_id}")
-    return summarize_board(b, doc_id, doc, a.get("page_id"), bool(a.get("include_svg")))
+    result = summarize_board(b, doc_id, doc, a.get("page_id"), bool(a.get("include_svg")))
+    # The base is always the WHOLE board (a page_id read still merges correctly).
+    result["edit_revision"] = _remember(b, doc_id, result["updated_at"], doc.get("diagram"))
+    return result
 
 
 def t_create_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
@@ -625,17 +718,428 @@ def t_update_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
     doc = b.call("GET", f"/api/documents/{doc_id}")
     current = meta_of(doc)
     expected = a.get("expected_updated_at")
-    if expected is not None and abs(float(current.get("updated_at") or 0) - float(expected)) > 1e-6:
+    has_base, base = _read_base(b, doc_id, a)
+    if not has_base and expected is not None and abs(float(current.get("updated_at") or 0) - float(expected)) > 1e-6:
         raise ToolError(
             f"conflict: the board changed since you read it (updated_at is now "
             f"{current.get('updated_at')}). Call get_board again and re-apply your edit."
         )
     # Keep the stored SVG preview — the editor strips the baked layer on open
-    # and re-renders from JSON. author_name attributes the version snapshot.
-    meta = meta_of(b.call("PUT", f"/api/documents/{doc_id}",
-                          {"svg": doc.get("svg") or "", "diagram": a["diagram"],
-                           "author_name": b.agent_name}))
-    return _ref(b, doc_id, meta, current.get("name"))
+    # and re-renders from JSON. author_name attributes the version snapshot;
+    # agent=True shows it in live presence as an agent.
+    body: Dict[str, Any] = {"svg": doc.get("svg") or "", "diagram": a["diagram"],
+                            "author_name": b.agent_name, "agent": True}
+    if expected is not None:
+        body["expected_updated_at"] = expected
+    if has_base:
+        body["base_diagram"] = base
+    meta = meta_of(b.call("PUT", f"/api/documents/{doc_id}", body))
+    out = _ref(b, doc_id, meta, current.get("name"))
+    try:
+        saved = b.call("GET", f"/api/documents/{doc_id}")
+    except ApiError:
+        return out  # the write succeeded; the check is advisory
+    out["post_save_check"] = post_save_check(base if has_base else doc.get("diagram"),
+                                             a["diagram"], saved.get("diagram") if isinstance(saved, dict) else None)
+    return out
+
+
+# ---- post-save check ---------------------------------------------------------------
+# People keep boards open while an agent writes: the server merges their live
+# edits into the agent's save. So "what I sent" is not "what is on the board".
+# After every write, diff the saved board against what was sent (anything else
+# is a collaborator's manual input) and lint the pages the agent touched.
+
+_CHECK_CAP = 20
+
+
+def _by_id(items: Any) -> Dict[str, Dict[str, Any]]:
+    return {str(o.get("id")): o for o in (items or []) if isinstance(o, dict) and o.get("id") is not None}
+
+
+def _label(o: Dict[str, Any]) -> str:
+    text = str(o.get("text") or "").strip().replace("\n", " ")
+    return text[:40] if text else f"<empty {o.get('kind') or 'edge'}>"
+
+
+def _is_text_only(n: Dict[str, Any]) -> bool:
+    return n.get("fill") in (None, "", "transparent", "none") and n.get("stroke") in (None, "", "transparent", "none")
+
+
+def _box(n: Dict[str, Any]) -> Optional[tuple]:
+    try:
+        x, y, w, h = (float(n[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return x, y, x + w, y + h
+
+
+def _partial_overlap(a: tuple, b: tuple) -> bool:
+    ix = min(a[2], b[2]) - max(a[0], b[0])
+    iy = min(a[3], b[3]) - max(a[1], b[1])
+    if ix <= 1 or iy <= 1:
+        return False
+    return not (_contains(a, b) or _contains(b, a))  # a frame around its children is fine
+
+
+def _is_frame(n: Dict[str, Any]) -> bool:
+    """A container: hollow, unlabeled, big enough to hold things (its title is a separate text node)."""
+    return (n.get("fill") in (None, "", "transparent", "none") and not str(n.get("text") or "").strip()
+            and float(n.get("w") or 0) >= 200 and float(n.get("h") or 0) >= 100)
+
+
+def _contains(p: tuple, q: tuple) -> bool:
+    return p[0] <= q[0] and p[1] <= q[1] and p[2] >= q[2] and p[3] >= q[3]
+
+
+def _area(b: tuple) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _inter(a: tuple, b: tuple) -> float:
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def _text_fits(n: Dict[str, Any]) -> bool:
+    """Rough fit test: Inter averages ≈0.5em per glyph; allow ~1.15 line height plus slack, since
+    labels render a little past their box without clipping. Only clear misses are reported."""
+    lines = str(n.get("text") or "").split("\n")
+    size = float(n.get("fontSize") or 16)
+    width = max(len(line) for line in lines) * size * 0.5
+    return width <= float(n.get("w") or 0) - 4 and len(lines) * size * 1.15 <= float(n.get("h") or 0) + 8
+
+
+# Severity "error" = visibly wrong, fix before finishing; "warning" = check the PNG and decide.
+LINT_FIXES = {
+    "dangling_edge": "Re-attach or delete the edge.",
+    "stray_shape": "Looks like a leftover (empty, unconnected, outside any frame): delete it if you made it, else ask.",
+    "tiny_shape": "Accidental click-drag? Delete it or give it a real size.",
+    "duplicate": "Two identical shapes stacked: keep one, re-point edges, delete the other.",
+    "overlap": "Move one shape so they don't partially cover each other (>=40px gap).",
+    "straddles_frame": "Move the shape fully inside or fully outside the frame, or grow the frame.",
+    "text_overlap": "Move the label so text never sits on other text.",
+    "text_overflow": "Widen/heighten the shape, shorten the text, or lower fontSize.",
+    "misaligned": "Snap to the same centre x/y as its neighbour.",
+    "empty_shape": "Give it a label or delete it.",
+    "orphan": "Connect it or confirm it is intentionally standalone (a note/legend).",
+    "empty_container": "Delete the empty frame or put its content back inside.",
+    "duplicate_edge": "Delete the repeated edge.",
+    "edge_crosses_shape": "Re-route: move the shape out of the line's way, change the edge's ports, or drop "
+                          "stale waypoints so the router can go around.",
+    "edge_crosses_text": "Move the label or re-route the edge so the line never runs through text.",
+}
+_SEVERITY = {"dangling_edge": "error", "stray_shape": "error", "tiny_shape": "error", "duplicate": "error",
+             "overlap": "error", "straddles_frame": "error", "text_overlap": "error",
+             "edge_crosses_shape": "error", "edge_crosses_text": "error"}
+
+
+def _route_issues(page: Dict[str, Any], routes: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Edges whose RENDERED route (sampled by the capture renderer) runs through a shape or a
+    text label other than the edge's own endpoints. Frames are skipped: lines legitimately
+    cross container borders. A 4px inset ignores lines that merely graze an outline."""
+    pid, nodes = page.get("id"), _by_id(page.get("nodes"))
+    issues: List[Dict[str, Any]] = []
+    for link in page.get("edges") or []:
+        pts = routes.get(str(link.get("id"))) if isinstance(link, dict) else None
+        if not pts:
+            continue
+        ends = {str((link.get(k) or {}).get("nodeId")) for k in ("source", "target")}
+        for nid, n in nodes.items():
+            b = _box(n)
+            if nid in ends or not b or _is_frame(n) or n.get("kind") == "freedraw":
+                continue
+            text_only = _is_text_only(n)
+            if text_only and not str(n.get("text") or "").strip():
+                continue
+            inset = (b[0] + 4, b[1] + 4, b[2] - 4, b[3] - 4)
+            if inset[0] >= inset[2] or inset[1] >= inset[3]:
+                continue
+            hits = sum(1 for x, y in pts if inset[0] < x < inset[2] and inset[1] < y < inset[3])
+            if hits >= 2:  # two samples ≈ 6px of line inside: a real crossing, not a rounding blip
+                kind = "edge_crosses_text" if text_only else "edge_crosses_shape"
+                what = (link.get("labels") or [{}])[0].get("text") or link.get("id")
+                issues.append({"page_id": pid, "type": kind, "severity": "error", "ids": [link.get("id"), nid],
+                               "detail": f"edge '{what}' runs through '{_label(n)}'", "fix": LINT_FIXES[kind]})
+    return issues
+
+
+def _page_issues(page: Dict[str, Any]) -> List[Dict[str, Any]]:
+    pid, nodes = page.get("id"), _by_id(page.get("nodes"))
+    links = [e for e in page.get("edges") or [] if isinstance(e, dict)]
+    issues: List[Dict[str, Any]] = []
+
+    def add(kind: str, ids: List[Any], detail: str) -> None:
+        issues.append({"page_id": pid, "type": kind, "severity": _SEVERITY.get(kind, "warning"),
+                       "ids": ids, "detail": detail, "fix": LINT_FIXES[kind]})
+
+    connected: set = set()
+    pairs: Dict[tuple, Any] = {}
+    for link in links:
+        ends = []
+        for end in ("source", "target"):
+            att = link.get(end) or {}
+            if att.get("kind") in ("port", "floating"):
+                nid = str(att.get("nodeId"))
+                if nid not in nodes:
+                    add("dangling_edge", [link.get("id")], f"edge {end} points at missing node {nid}")
+                connected.add(nid)
+                ends.append(nid)
+        if len(ends) == 2:
+            key = tuple(ends)
+            if key in pairs:
+                add("duplicate_edge", [pairs[key], link.get("id")], f"two edges {ends[0]} -> {ends[1]}")
+            pairs.setdefault(key, link.get("id"))
+
+    boxed = [(i, n, _box(n)) for i, n in nodes.items() if n.get("kind") != "freedraw" and _box(n)]
+    frames = [(i, b) for i, n, b in boxed if _is_frame(n)]
+    labels = [(i, n, b) for i, n, b in boxed if _is_text_only(n) and str(n.get("text") or "").strip()]
+    shapes = [(i, n, b) for i, n, b in boxed if not _is_text_only(n)]
+
+    def inside(i: str, b: tuple) -> bool:
+        return any(f != i and _contains(fb, b) for f, fb in frames)
+
+    for i, n, b in shapes:
+        has_text = bool(str(n.get("text") or "").strip())
+        if (b[2] - b[0]) < 8 or (b[3] - b[1]) < 8:
+            add("tiny_shape", [i], f"{n.get('kind')} is {b[2]-b[0]:.0f}x{b[3]-b[1]:.0f}px")
+            continue
+        if _is_frame(n):
+            if not any(j != i and _contains(b, bj) for j, _, bj in boxed):
+                add("empty_container", [i], "frame contains nothing")
+            continue
+        if not has_text and n.get("kind") != "icon":
+            if i not in connected and not inside(i, b):
+                add("stray_shape", [i], f"empty {n.get('kind')} at ({b[0]:.0f},{b[1]:.0f})")
+            else:
+                add("empty_shape", [i], f"{n.get('kind')} with no label")
+        elif has_text and n.get("kind") != "icon" and not _text_fits(n):
+            add("text_overflow", [i], f"'{_label(n)}' may not fit its {b[2]-b[0]:.0f}x{b[3]-b[1]:.0f} box")
+        if has_text and links and i not in connected and not inside(i, b) and n.get("kind") != "icon":
+            add("orphan", [i], f"'{_label(n)}' has no connections and sits outside every frame")
+    for i, n, b in labels:
+        if not _text_fits(n):
+            add("text_overflow", [i], f"label '{_label(n)}' is wider than its {b[2]-b[0]:.0f}px box")
+
+    for k, (i, n, bi) in enumerate(shapes):
+        for j, m, bj in shapes[k + 1:]:
+            if _inter(bi, bj) <= 1:
+                continue
+            same = ((n.get("kind"), str(n.get("text") or ""), n.get("iconKey"))
+                    == (m.get("kind"), str(m.get("text") or ""), m.get("iconKey")))
+            similar = min(_area(bi), _area(bj)) >= 0.8 * max(_area(bi), _area(bj))  # nested frames aren't copies
+            if same and similar and _inter(bi, bj) >= 0.8 * min(_area(bi), _area(bj)):
+                add("duplicate", [i, j], f"'{_label(n)}' is stacked on an identical copy")
+            elif _is_frame(n) != _is_frame(m) and _partial_overlap(bi, bj):
+                frame_id, other_id, other = (i, j, m) if _is_frame(n) else (j, i, n)
+                add("straddles_frame", [other_id, frame_id], f"'{_label(other)}' sits across a frame border")
+            elif not _is_frame(n) and not _is_frame(m) and _partial_overlap(bi, bj):
+                add("overlap", [i, j], f"'{_label(n)}' overlaps '{_label(m)}'")
+    texty = labels + [(i, n, b) for i, n, b in shapes if str(n.get("text") or "").strip()]
+    for k, (i, n, bi) in enumerate(texty):
+        for j, m, bj in texty[k + 1:]:
+            if (_is_text_only(n) or _is_text_only(m)) and _inter(bi, bj) > 0.15 * min(_area(bi), _area(bj)):
+                add("text_overlap", [i, j], f"text '{_label(n)}' collides with '{_label(m)}'")
+
+    solid = [(i, b) for i, n, b in shapes if not _is_frame(n) and (b[2] - b[0]) < 400]
+    for k, (i, bi) in enumerate(solid):
+        for j, bj in solid[k + 1:]:
+            dx = abs((bi[0] + bi[2]) - (bj[0] + bj[2])) / 2
+            dy = abs((bi[1] + bi[3]) - (bj[1] + bj[3])) / 2
+            off = dy if 1 <= dy <= 6 and dx < 600 else dx if 1 <= dx <= 6 and dy < 600 else 0
+            if off:
+                add("misaligned", [i, j], f"centres differ by {off:.0f}px")
+    return sorted(issues, key=lambda x: 0 if x["severity"] == "error" else 1)
+
+
+SELF_REVIEW = (
+    "SELF-REVIEW before saying a board is done: run lint_board (or read post_save_check.issues) and fix every "
+    "error on what YOU drew: stray/leftover or tiny shapes, stacked duplicate shapes/icons, shapes overlapping "
+    "or sitting across a frame border, text on top of text, edges running through shapes or text, dangling or duplicate edges. Then check warnings: "
+    "text that overflows its box, near-miss alignment (1-6px), unlabeled shapes, unconnected shapes, empty "
+    "frames. capture_board and LOOK for what lint cannot see: crowded areas, edges crossing each other, "
+    "labels cut by lines, inconsistent colours. Delete or fix your own leftovers without asking; for shapes "
+    "someone else drew (manual_changes, or not part of your edit), report them and ask before moving or "
+    "deleting. Re-run lint after fixing; finish only with zero errors on your own objects."
+)
+
+
+def post_save_check(base: Any, sent: Any, saved: Any) -> Dict[str, Any]:
+    """Compare what the agent sent with what the board holds after the save
+    (``manual_changes`` = other people's work merged in, never to be undone
+    silently) and lint every page the agent changed (``issues``)."""
+    sent_pages = {p.get("id"): p for p in pages_of(sent)}
+    saved_pages = {p.get("id"): p for p in pages_of(saved)}
+    base_pages = {p.get("id"): p for p in pages_of(base)}
+    manual: List[Dict[str, Any]] = []
+    for pid in sorted(set(sent_pages) | set(saved_pages), key=str):
+        if pid not in saved_pages:
+            manual.append({"page_id": pid, "change": "page_removed", "ids": []})
+            continue
+        if pid not in sent_pages:
+            manual.append({"page_id": pid, "change": "page_added", "ids": []})
+            continue
+        for key in ("nodes", "edges"):
+            mine, theirs = _by_id(sent_pages[pid].get(key)), _by_id(saved_pages[pid].get(key))
+            for oid in theirs.keys() - mine.keys():
+                manual.append({"page_id": pid, "change": "added", "ids": [oid], "label": _label(theirs[oid])})
+            for oid in mine.keys() - theirs.keys():
+                manual.append({"page_id": pid, "change": "removed", "ids": [oid], "label": _label(mine[oid])})
+            for oid in mine.keys() & theirs.keys():
+                fields = sorted(f for f in set(mine[oid]) | set(theirs[oid])
+                                if f != "z" and mine[oid].get(f) != theirs[oid].get(f))
+                if fields:
+                    manual.append({"page_id": pid, "change": "modified", "ids": [oid],
+                                   "label": _label(theirs[oid]), "fields": fields[:8]})
+    touched = [pid for pid, p in sent_pages.items() if p != base_pages.get(pid) and pid in saved_pages]
+    issues = [i for pid in touched for i in _page_issues(saved_pages[pid])]
+    # "yours" = an object this write added or changed: fix those freely; ask about the rest.
+    for issue in issues:
+        sent_p, base_p = sent_pages.get(issue["page_id"]) or {}, base_pages.get(issue["page_id"]) or {}
+        mine = {**_by_id(sent_p.get("nodes")), **_by_id(sent_p.get("edges"))}
+        before = {**_by_id(base_p.get("nodes")), **_by_id(base_p.get("edges"))}
+        issue["yours"] = any(str(i) in mine and mine[str(i)] != before.get(str(i)) for i in issue["ids"])
+    errors = sum(1 for i in issues if i["severity"] == "error")
+    if manual or issues:
+        next_step = ("Someone edited the board while you worked and/or the saved pages have problems. "
+                     "Keep manual_changes (never revert another person's edit without asking) and tell the "
+                     "user what they changed. Fix every issue with yours=true, report the others and ask. "
+                     "Then capture_board. " + SELF_REVIEW)
+    else:
+        next_step = "Saved exactly as sent; no layout issues found. capture_board and inspect it visually."
+    return {"manual_changes": manual[:_CHECK_CAP], "manual_change_count": len(manual),
+            "issues": issues[:_CHECK_CAP], "issue_count": len(issues), "error_count": errors,
+            "next_step": next_step}
+
+
+def t_clone_diagram(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
+    doc_id = resolve_doc_id(b, a["doc_id"])
+    doc = b.call("GET", f"/api/documents/{doc_id}")
+    diagram = copy.deepcopy(doc.get("diagram")) if isinstance(doc, dict) else None
+    if not isinstance(diagram, dict):
+        raise ToolError("This board has no editable diagram to clone.")
+    check_diagram(diagram)
+    pages = diagram.get("pages") or [diagram]
+    page_id = a.get("page_id")
+    if not page_id and len(pages) > 1:
+        raise ToolError("Choose page_id from get_board before cloning a multi-page board.")
+    page = next((p for p in pages if p.get("id", "p1") == page_id), None) if page_id else pages[0]
+    if page is None:
+        raise ToolError("Page not found. Call get_board for the page IDs.")
+    nodes, edges = page.get("nodes", []), page.get("edges", [])
+    selected = set(a.get("node_ids") or [n["id"] for n in nodes])
+    if not selected or not selected <= {n["id"] for n in nodes}:
+        raise ToolError("node_ids must select existing nodes on this page.")
+    originals = [n for n in nodes if n["id"] in selected]
+    for n in nodes:
+        if any(not isinstance(n.get(k), (int, float)) or not math.isfinite(n[k]) for k in ("x", "y", "w", "h")):
+            raise ToolError("Cannot clone nodes with missing or invalid geometry.")
+    dx = math.ceil((max(n["x"] + n["w"] for n in nodes) + a.get("gap", 120)
+                    - min(n["x"] for n in originals)) / 4) * 4
+    node_map = {n["id"]: "n_" + uuid.uuid4().hex[:16] for n in originals}
+    groups = {n["groupId"]: "g_" + uuid.uuid4().hex[:16] for n in originals if n.get("groupId")}
+    clones = []
+    for n in originals:
+        clone = copy.deepcopy(n)
+        clone.update(id=node_map[n["id"]], x=n["x"] + dx)
+        if clone.get("groupId"):
+            clone["groupId"] = groups[clone["groupId"]]
+        clones.append(clone)
+    edge_map: Dict[str, str] = {}
+    cloned_edges, skipped = [], []
+    whole_page = selected == {n["id"] for n in nodes}
+    for e in edges:
+        refs = {att["nodeId"] for att in (e.get("source") or {}, e.get("target") or {})
+                if isinstance(att, dict) and att.get("nodeId")}
+        if not whole_page and (not refs or not refs <= selected):
+            if refs & selected:
+                skipped.append(e["id"])
+            continue
+        clone = copy.deepcopy(e)
+        clone["id"] = edge_map[e["id"]] = "e_" + uuid.uuid4().hex[:16]
+        for key in ("source", "target"):
+            att = clone.get(key)
+            if not isinstance(att, dict):
+                continue
+            if att.get("nodeId"):
+                if att["nodeId"] not in node_map:
+                    raise ToolError("An edge references a missing node; repair the source before cloning.")
+                att["nodeId"] = node_map[att["nodeId"]]
+            elif att.get("kind") == "free" and isinstance(att.get("point"), dict):
+                att["point"]["x"] += dx
+        for point in clone.get("waypoints") or []:
+            point["x"] += dx
+        for label in clone.get("labels") or []:
+            label["id"] = "l_" + uuid.uuid4().hex[:16]
+        cloned_edges.append(clone)
+    page["nodes"] = nodes + clones
+    page["edges"] = edges + cloned_edges
+    revision = _remember(b, doc_id, meta_of(doc).get("updated_at"), doc.get("diagram"))
+    result = t_update_board(b, {"doc_id": doc_id, "diagram": diagram, "edit_revision": revision,
+                                "expected_updated_at": a["expected_updated_at"]})
+    return {**result, "page_id": page.get("id", "p1"), "node_id_map": node_map,
+            "edge_id_map": edge_map, "offset": {"x": dx, "y": 0},
+            "skipped_crossing_edge_ids": skipped,
+            "next_step": "Edit only clone IDs, preserve originals, read post_save_check, then "
+                         "capture_board and inspect its PNG. Ask before removing originals or "
+                         "creating a separate board."}
+
+
+def t_lint_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
+    doc_id = resolve_doc_id(b, a["doc_id"])
+    doc = b.call("GET", f"/api/documents/{doc_id}")
+    pages = pages_of(doc.get("diagram") if isinstance(doc, dict) else None)
+    if a.get("page_id") is not None:
+        pages = [p for p in pages if p.get("id") == a["page_id"]]
+        if not pages:
+            raise ToolError(f"page {a['page_id']!r} not found")
+    issues = [i for p in pages for i in _page_issues(p)]
+    # Edge routing only exists once rendered: capture each page and check the real lines.
+    routes_checked, unchecked = [], []
+    if a.get("check_routes", True):
+        for p in pages:
+            if not p.get("edges"):
+                continue
+            try:
+                shot = b.call("POST", f"/api/documents/{doc_id}/capture", {"page_id": p.get("id")})
+                routes = shot.get("edge_routes") if isinstance(shot, dict) else None
+            except ApiError:
+                routes = None
+            if routes is None:
+                unchecked.append(p.get("id"))
+                continue
+            issues = [i for i in issues if i["page_id"] != p.get("id")] + sorted(
+                [i for i in issues if i["page_id"] == p.get("id")] + _route_issues(p, routes),
+                key=lambda x: 0 if x["severity"] == "error" else 1)
+            routes_checked.append(p.get("id"))
+    out = {"id": doc_id, "url": b.board_url(doc_id), "updated_at": meta_of(doc).get("updated_at"),
+           "pages": [{"page_id": p.get("id"), "name": p.get("name"),
+                      "issue_count": sum(1 for i in issues if i["page_id"] == p.get("id"))} for p in pages],
+           "error_count": sum(1 for i in issues if i["severity"] == "error"),
+           "issue_count": len(issues), "issues": issues[:50], "routes_checked": routes_checked,
+           "checklist": SELF_REVIEW}
+    if unchecked:
+        out["routes_unchecked"] = unchecked
+        out["note"] = ("Edge routing was NOT checked on these pages (renderer unavailable): inspect "
+                       "capture_board for lines through shapes or text.")
+    return out
+
+
+def t_capture_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
+    doc_id = resolve_doc_id(b, a["doc_id"])
+    out = b.call("POST", f"/api/documents/{doc_id}/capture", {
+        "page_id": a.get("page_id"), "expected_updated_at": a.get("expected_updated_at"),
+    })
+    if not isinstance(out, dict):
+        raise ToolError("unexpected capture payload")
+    out.pop("edge_routes", None)  # lint_board's input, not the picture's
+    return out
+
+
+def t_join_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
+    doc_id = resolve_doc_id(b, a["doc_id"])
+    out = b.call("POST", f"/api/documents/{doc_id}/presence", {"name": b.agent_name})
+    out = out if isinstance(out, dict) else {}
+    return {**out, "id": doc_id, "url": b.board_url(doc_id)}
 
 
 def t_rename_board(b: Backend, a: Dict[str, Any]) -> Dict[str, Any]:
@@ -713,7 +1217,8 @@ TOOLS: List[Dict[str, Any]] = [
                 "doc_id": DOC_ID,
                 "page_id": {"type": "string", "description": "Return only this page."},
                 "include_svg": {"type": "boolean", "default": False,
-                                "description": "Also return the flattened preview SVG (large)."},
+                                "description": "Also return the stored preview SVG (large, one page "
+                                               "only). For a picture of a page, use capture_board."},
             },
             "required": ["doc_id"],
             "additionalProperties": False,
@@ -725,8 +1230,10 @@ TOOLS: List[Dict[str, Any]] = [
     {
         "name": "create_board",
         "title": "Create board",
-        "description": "Create a NEW board, optionally with diagram JSON. Returns the new id + "
-                       "url. The board is anonymous: anyone with the url can open and edit it.",
+        "description": "Only when the user explicitly chooses a NEW board — to revise an existing "
+                       "diagram use clone_diagram instead. Create a NEW board, optionally with "
+                       "diagram JSON. Returns the new id + url. The board is anonymous: anyone "
+                       "with the url can open and edit it.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -742,25 +1249,168 @@ TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "update_board",
-        "title": "Replace board diagram",
-        "description": "Replace a board's WHOLE diagram (full-state, like the live protocol; a "
-                       "version snapshot is kept). Fetch with get_board, modify, send everything "
-                       "back. Pass expected_updated_at to fail instead of overwriting a "
-                       "collaborator's newer edit.",
+        "title": "Update board collaboratively",
+        "description": "Update a board collaboratively while people keep it open (a version "
+                       "snapshot is kept). Fetch with get_board, modify, send the WHOLE diagram "
+                       "back with its edit_revision (or expected_updated_at): only the fields you "
+                       "changed merge with the live board, so unrelated human edits survive and "
+                       "viewers update immediately; for the same field the last arriving edit "
+                       "wins. Without a read base, expected_updated_at fails instead of "
+                       "overwriting a newer edit. First clone_diagram, edit only clone IDs and "
+                       "preserve originals; capture the saved page as PNG afterwards. The "
+                       "result's post_save_check lists collaborators' manual edits merged into "
+                       "your save and layout issues on pages you changed — read it after EVERY "
+                       "write and report manual edits to the user.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "doc_id": DOC_ID,
                 "diagram": DIAGRAM_IN,
+                "edit_revision": {"type": "string", "maxLength": 64,
+                                  "description": "From get_board: merge only your changed fields "
+                                                 "with live collaborators. Preferred."},
                 "expected_updated_at": {"type": "number",
-                                        "description": "updated_at from get_board (optimistic concurrency)."},
+                                        "description": "updated_at from get_board (optimistic "
+                                                       "concurrency when no read base is known)."},
             },
             "required": ["doc_id", "diagram"],
             "additionalProperties": False,
         },
-        "outputSchema": REF_OUT,
-        "annotations": _ann("Replace board diagram", read_only=False, destructive=True, idempotent=True),
+        "outputSchema": WRITE_OUT,
+        "annotations": _ann("Update board", read_only=False, destructive=True, idempotent=True),
         "handler": t_update_board,
+    },
+    {
+        "name": "clone_diagram",
+        "title": "Clone diagram beside original",
+        "description": "FIRST step before editing an existing diagram. Clone all or selected nodes "
+                       "to the right on the SAME page, preserving originals, remapping groups, "
+                       "edges and waypoints. Returns old-to-new ID maps; modify only clone IDs. "
+                       "Does not create a board. Capture after editing; ask before removing "
+                       "originals.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "doc_id": DOC_ID,
+                "page_id": {"type": "string"},
+                "node_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 1000},
+                "gap": {"type": "number", "minimum": 80, "maximum": 1000, "default": 120},
+                "expected_updated_at": {"type": "number"},
+            },
+            "required": ["doc_id", "expected_updated_at"],
+            "additionalProperties": False,
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                **WRITE_OUT["properties"], "page_id": {"type": "string"},
+                "node_id_map": {"type": "object", "additionalProperties": {"type": "string"}},
+                "edge_id_map": {"type": "object", "additionalProperties": {"type": "string"}},
+                "offset": {"type": "object"},
+                "skipped_crossing_edge_ids": {"type": "array", "items": {"type": "string"}},
+                "next_step": {"type": "string"},
+            },
+            "required": ["id", "url", "updated_at", "page_id", "node_id_map", "edge_id_map"],
+        },
+        "annotations": _ann("Clone beside original", read_only=False, destructive=False, idempotent=False),
+        "handler": t_clone_diagram,
+    },
+    {
+        "name": "capture_board",
+        "title": "Capture diagram as PNG",
+        "description": "Render a saved diagram page through the editor's React renderer and return "
+                       "a PNG image — just the picture, no diagram JSON. Use it whenever someone "
+                       "asks what a board looks like (page_id required for multi-page boards; get "
+                       "the ids from get_board). REQUIRED after edits: pass the saved updated_at "
+                       "so a stale capture fails, inspect the image, repair layout/text/edges and "
+                       "capture again. Omit expected_updated_at to capture whatever is saved now. "
+                       "Does not declare visual validation complete: you must actually inspect "
+                       "the image. Fails if the instance has no headless browser installed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "doc_id": DOC_ID,
+                "page_id": {"type": "string"},
+                "expected_updated_at": {"type": "number",
+                                        "description": "Fail if the board changed since this revision."},
+            },
+            "required": ["doc_id"],
+            "additionalProperties": False,
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"}, "page_id": {"type": "string"},
+                "updated_at": {"type": "number"}, "width": {"type": "integer"},
+                "height": {"type": "integer"}, "scale": {"type": "number"},
+                "renderer": {"type": "string"}, "scope": {"type": "string"},
+                "visual_validation": {"type": "string"},
+            },
+            "required": ["id", "page_id", "updated_at", "width", "height", "renderer",
+                         "visual_validation"],
+        },
+        "annotations": _ann("Capture diagram PNG", read_only=True),
+        "handler": t_capture_board,
+    },
+    {
+        "name": "lint_board",
+        "title": "Lint board layout",
+        "description": "Self-review a board without changing it: finds stray/leftover and tiny "
+                       "shapes, stacked duplicates, overlaps, shapes across a frame border, text "
+                       "on text, text overflowing its box, near-miss alignment, unlabeled/"
+                       "unconnected shapes, empty frames, dangling and duplicate edges, and (from "
+                       "the rendered routes) edges running through shapes or text. Each issue has "
+                       "severity (error|warning), ids and a fix. Run it before you edit (to know "
+                       "what was already wrong) and after (finish with zero errors on what you drew).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "doc_id": DOC_ID,
+                "page_id": {"type": "string", "description": "Lint only this page."},
+                "check_routes": {"type": "boolean", "default": True,
+                                 "description": "Render each page to check where edges are routed "
+                                                "(lines through shapes/text). ~2s per page."},
+            },
+            "required": ["doc_id"],
+            "additionalProperties": False,
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"}, "url": {"type": "string"},
+                "updated_at": {"type": ["number", "null"]}, "pages": {"type": "array"},
+                "error_count": {"type": "integer"}, "issue_count": {"type": "integer"},
+                "issues": {"type": "array"}, "checklist": {"type": "string"},
+                "routes_checked": {"type": "array"}, "routes_unchecked": {"type": "array"},
+                "note": {"type": "string"},
+            },
+            "required": ["id", "issues", "issue_count", "error_count"],
+        },
+        "annotations": _ann("Lint board layout", read_only=True),
+        "handler": t_lint_board,
+    },
+    {
+        "name": "join_board",
+        "title": "Join board",
+        "description": "Show yourself in the board's live presence (as NODDLE_AGENT_NAME — an agent "
+                       "named Claude gets the Claude icon) so people with the board open see you "
+                       "are there. Changes nothing on the board. Call it when you start working "
+                       "on a board; saves keep you visible too. Visible for ~5 minutes per join.",
+        "inputSchema": {
+            "type": "object", "properties": {"doc_id": DOC_ID},
+            "required": ["doc_id"], "additionalProperties": False,
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"}, "url": {"type": "string"},
+                "joined_as": {"type": "object"}, "live_viewers": {"type": "boolean"},
+                "visible_for_seconds": {"type": "number"},
+            },
+            "required": ["id", "joined_as", "live_viewers"],
+        },
+        "annotations": _ann("Join board", read_only=False, destructive=False, idempotent=True),
+        "handler": t_join_board,
     },
     {
         "name": "rename_board",
@@ -951,9 +1601,12 @@ def m_tools_call(params: Dict[str, Any], ctx: Ctx) -> Dict[str, Any]:
         structured = tool["handler"](ctx.backend, args)
     except (ToolError, ApiError) as e:
         return _tool_error(str(e))
+    png = structured.pop("png_base64", None) if name == "capture_board" and isinstance(structured, dict) else None
     content: List[Dict[str, Any]] = [
         {"type": "text", "text": redact(json.dumps(structured, ensure_ascii=False))}
     ]
+    if png:
+        content.append({"type": "image", "mimeType": "image/png", "data": png})
     doc_id = structured.get("id") if isinstance(structured, dict) else None
     if name in RESOURCE_LINK_TOOLS and isinstance(doc_id, str) and ctx.supports_resource_links():
         content.append({"type": "resource_link", "uri": board_uri(doc_id),
@@ -1023,10 +1676,13 @@ def m_resources_read(params: Dict[str, Any], ctx: Ctx) -> Dict[str, Any]:
 PROMPTS = [
     {
         "name": "design_board",
-        "title": "Design a new board",
-        "description": "Draft a new noddle board about a topic and return its link.",
+        "title": "Design or revise a diagram",
+        "description": "Draft a new board, or revise an existing one beside the original, capture "
+                       "a PNG for visual review, then ask how to keep it.",
         "arguments": [
             {"name": "topic", "description": "What the diagram should explain.", "required": True},
+            {"name": "doc_id", "description": "Existing board id or URL to revise beside the original.",
+             "required": False},
             {"name": "notes", "description": "Extra constraints (audience, components, style).",
              "required": False},
         ],
@@ -1056,6 +1712,19 @@ def m_prompts_get(params: Dict[str, Any], ctx: Ctx) -> Dict[str, Any]:
         if not topic:
             raise RpcError(INVALID_PARAMS, "Missing required argument: topic")
         notes = args.get("notes", "").strip()
+        existing = args.get("doc_id", "").strip()
+        if existing:
+            try:
+                doc_id = resolve_doc_id(ctx.backend, existing)
+            except ToolError as e:
+                raise RpcError(INVALID_PARAMS, str(e)) from None
+            text = (
+                f"Revise the diagram on board {doc_id} so it explains: {topic}\n"
+                + (f"Constraints: {notes}\n" if notes else "")
+                + "\n" + INSTRUCTIONS
+            )
+            return {"description": f"Revise board {doc_id} about {topic}",
+                    "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
         text = (
             f"Create a noddle board that explains: {topic}\n"
             + (f"Constraints: {notes}\n" if notes else "")
@@ -1065,7 +1734,8 @@ def m_prompts_get(params: Dict[str, Any], ctx: Ctx) -> Dict[str, Any]:
             "available, write the diagram JSON yourself.\n"
             "2. Review that JSON: keep it to roughly 9 nodes or fewer per page, short labels, "
             "and edges attached to node ids.\n"
-            "3. Call create_board with a clear name and the diagram.\n"
+            "3. Call create_board with a clear name and the diagram, then lint_board and "
+            "capture_board to check it visually; fix every lint error.\n"
             "4. Reply with the board url and a one-paragraph summary. Remind the user that "
             "anyone with the url can open and edit the board.\n"
             "Do not include personal data, credentials or account numbers in any text."
@@ -1079,11 +1749,12 @@ def m_prompts_get(params: Dict[str, Any], ctx: Ctx) -> Dict[str, Any]:
             raise RpcError(INVALID_PARAMS, str(e)) from None
         resource = read_board_resource(ctx.backend, board_uri(doc_id))
         text = (
-            "Review the noddle board above for clarity: overlapping or crowded shapes, "
-            "unlabeled or ambiguous connectors, inconsistent colours, missing components. "
-            "For each concrete issue call add_comment anchored to the node_id or edge_id it "
-            f"concerns (doc_id={doc_id}). Do not change the diagram unless asked. Finish with a "
-            "short prioritized summary."
+            f"Review the noddle board above. First call lint_board (doc_id={doc_id}) and "
+            "capture_board for each page, then judge clarity: overlapping or crowded shapes, "
+            "leftover/duplicate shapes, text on text, unlabeled or ambiguous connectors, "
+            "inconsistent colours, missing components. For each concrete issue call add_comment "
+            f"anchored to the node_id or edge_id it concerns (doc_id={doc_id}). Do not change the "
+            "diagram unless asked. Finish with a short prioritized summary (errors first)."
         )
         return {"description": f"Review board {doc_id}", "messages": [
             {"role": "user", "content": {"type": "resource", "resource": resource}},

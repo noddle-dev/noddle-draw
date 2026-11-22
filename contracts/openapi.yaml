@@ -36,23 +36,32 @@ x-websocket-protocol:
   path: /ws/documents/{doc_id}
   auth: none — join requires link_policy to grant "view"; a "state" frame
     requires "edit" (services/auth.py::can, same gate as HTTP)
-  model: full-state last-write-wins (no CRDT/OT); the room keeps the latest
-    diagram in memory for instant late-joiner sync; durable persistence stays
-    explicit (Save → PUT /api/documents/{doc_id})
+  model: full-state frames, last-write-wins per field (no CRDT/OT). A frame
+    carrying baseDiagram (the sender's read base) merges only the objects and
+    fields the sender changed into the board's in-memory live diagram, so
+    concurrent edits to different objects/fields/pages survive; a frame
+    without it replaces the page (legacy full-state LWW). Late joiners and
+    GET /api/documents/{doc_id} read the live diagram; durable persistence
+    stays explicit (Save → PUT /api/documents/{doc_id}), and HTTP/MCP saves
+    are published into the room as state frames (from null)
   client_to_server: |
-    {"t": "hello", "name": str, "color": str, "clientId": str}
+    {"t": "hello", "name": str, "color": str, "clientId": str, "pageId"?: str}
         — a new hello evicts any prior socket with the same clientId (4001)
     {"t": "state", "diagram": {"nodes": [...], "edges": [...]},
+     "baseDiagram"?: {"nodes": [...], "edges": [...]},
      "pageId"?: str, "removedNodeIds"?: [...], "removedEdgeIds"?: [...]}
-        — ignored from view-only links; removals apply to the room state so
+        — ignored from view-only links; removals apply to the live state so
           late joiners do not resurrect deleted objects
     {"t": "meta", "name": str} — live board-name sync (edit-gated)
     {"t": "cursor", "x": float, "y": float, "pageId"?: str}
   server_to_client: |
-    {"t": "init", "diagram": {...} | null, "you": int, "may_edit": bool}
-    {"t": "presence", "users": [{"id", "name", "color", "kind"}, ...]}
-    {"t": "state", "diagram": {...}, "from": int, "pageId",
-     "removedNodeIds", "removedEdgeIds"} — to others only
+    {"t": "init", "diagram": {"nodes", "edges"} | null, "pages": [...],
+     "pageId", "you": int, "may_edit": bool}
+    {"t": "presence", "users": [{"id", "name", "color", "kind", "icon"?}, ...]}
+        — agents (POST /presence, agent saves) have kind "agent" and a
+          negative id; icon "claude" when the agent's name says Claude
+    {"t": "state", "diagram": {...}, "baseDiagram", "from": int | null,
+     "pageId", "removedNodeIds", "removedEdgeIds", "actor"?} — to others only
     {"t": "meta", "name": str} — to others only
     {"t": "cursor", "id", "name", "color", "x", "y", "pageId"} — to others only
     {"t": "bye", "id": int}
@@ -149,12 +158,18 @@ paths:
     put:
       operationId: saveDocument
       tags: [documents]
-      summary: Save (last-write-wins) — records a coalesced version snapshot
+      summary: Save — records a coalesced version snapshot
       description: >-
         diagram semantics — omitted keeps the stored sidecar (legacy clients),
-        null clears it, an object replaces it after validation. SVG is
-        sanitized before storage. Restore is client-driven — PUT a fetched
-        version back through this same operation.
+        null clears it, an object replaces it after validation. With
+        base_diagram (what the caller last read) the save is a 3-way merge
+        onto the live board — only objects/fields the caller changed are
+        written, last-write-wins per field. Without a base,
+        expected_updated_at is an optimistic-concurrency precondition (409
+        when the board changed). The saved state is published to the open
+        collab room. SVG is sanitized before storage. Restore is
+        client-driven — PUT a fetched version back through this same
+        operation.
       parameters: [{ $ref: "#/components/parameters/DocId" }]
       requestBody:
         required: true
@@ -170,6 +185,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
     patch:
       operationId: renameDocument
       tags: [documents]
@@ -203,6 +219,60 @@ paths:
               schema: { type: string }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/capture:
+    post:
+      operationId: captureDocument
+      tags: [documents]
+      summary: Render one saved page to PNG through the editor's own renderer
+      description: >-
+        Headless Chromium loads the offline capture bundle (web/dist/capture.js)
+        under a CSP that forbids scripts from board data and all networking.
+        Visual evidence for agents (MCP capture_board / lint_board) — the
+        response also carries edge_routes (each edge's rendered path sampled
+        in content coordinates). 503 when no browser or bundle is installed.
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CaptureBody" }
+      responses:
+        "200":
+          description: The PNG (base64) and render metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaptureOut" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /api/documents/{doc_id}/presence:
+    post:
+      operationId: joinDocument
+      tags: [documents]
+      summary: An agent announces itself in the board's live presence
+      description: >-
+        MCP join_board — shows the named agent (kind "agent"; icon "claude"
+        when its name says Claude) to everyone with the board open for ~5
+        minutes, without writing anything. Needs "view". People join over the
+        WebSocket instead. The name is display-only, like every anonymous
+        identity.
+      parameters: [{ $ref: "#/components/parameters/DocId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PresenceBody" }
+      responses:
+        "200":
+          description: How the agent appears and whether anyone saw it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresenceOut" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
   /api/documents/{doc_id}/versions:
     get:
       operationId: listVersions
@@ -626,6 +696,83 @@ components:
           type: [string, "null"]
           description: Client-side identity attributing the version snapshot
             (trimmed to 40 chars)
+        base_diagram:
+          description: The diagram the caller last read — present ⇒ 3-way
+            merge onto the live board instead of a replace
+          oneOf:
+            - { $ref: "#/components/schemas/Diagram" }
+            - { $ref: "#/components/schemas/PagedDiagram" }
+            - { type: "null" }
+        expected_updated_at:
+          type: [number, "null"]
+          description: updated_at the caller read; without base_diagram a
+            mismatch fails the save with 409
+        agent:
+          type: boolean
+          default: false
+          description: An MCP/AI agent write — author_name is shown in live
+            presence as an agent for ~30 seconds
+    PresenceBody:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 40 }
+        client_id:
+          type: [string, "null"]
+          maxLength: 64
+          description: Opaque per-agent key so two agents with the same name
+            show as two avatars
+    PresenceOut:
+      type: object
+      required: [id, joined_as, live_viewers, visible_for_seconds]
+      properties:
+        id: { type: string }
+        joined_as:
+          type: object
+          required: [name, color, kind]
+          properties:
+            name: { type: string }
+            color: { type: string }
+            kind: { type: string, enum: [agent] }
+            icon: { type: string, enum: [claude] }
+        live_viewers:
+          type: boolean
+          description: false when nobody has the board open (nothing shown)
+        visible_for_seconds: { type: number }
+    CaptureBody:
+      type: object
+      properties:
+        page_id:
+          type: [string, "null"]
+          maxLength: 128
+          description: Required for multi-page boards
+        expected_updated_at:
+          type: [number, "null"]
+          description: Fail with 409 unless this is still the saved revision;
+            omitted ⇒ capture whatever is saved now
+    CaptureOut:
+      type: object
+      required: [id, page_id, updated_at, png_base64, width, height, renderer]
+      properties:
+        id: { type: string }
+        page_id: { type: string }
+        updated_at: { type: number }
+        png_base64: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        scale: { type: number }
+        renderer: { type: string }
+        scope: { type: string }
+        visual_validation:
+          type: string
+          description: Always pending_image_inspection — the caller must look
+        edge_routes:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: array
+              items: { type: number }
     CreateDocBody:
       type: object
       properties:

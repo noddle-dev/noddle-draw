@@ -167,6 +167,9 @@ interface AppState {
   /** Keyboard-shortcuts sheet (? key / ☰ → Keyboard shortcuts). */
   shortcutsOpen: boolean;
   setShortcutsOpen: (on: boolean) => void;
+  /** Browser preference for the canvas AI composer; messages/drafts stay intact. */
+  canvasChatCollapsed: boolean;
+  setCanvasChatCollapsed: (collapsed: boolean) => void;
   /** The floating Properties/AI panel — in the store (not local
    * state) so the chat status strip's "Details" can open it. */
   simplePanelOpen: boolean;
@@ -286,7 +289,7 @@ function persistChats(chats: Record<string, BoardChats>) {
   }
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   view: "editor",
   pendingDocId: null,
   pendingSvg: null,
@@ -310,6 +313,14 @@ export const useAppStore = create<AppState>((set) => ({
   toggleZen: () => set((s) => ({ zenMode: !s.zenMode })),
   shortcutsOpen: false,
   setShortcutsOpen: (on) => set({ shortcutsOpen: on }),
+  canvasChatCollapsed: (() => {
+    try { return localStorage.getItem("noddle-canvas-chat-collapsed") === "1"; }
+    catch { return false; }
+  })(),
+  setCanvasChatCollapsed: (canvasChatCollapsed) => {
+    try { localStorage.setItem("noddle-canvas-chat-collapsed", canvasChatCollapsed ? "1" : "0"); } catch { /* optional browser preference */ }
+    set({ canvasChatCollapsed, ...(canvasChatCollapsed && get().rightTab === "claude" ? { simplePanelOpen: false } : {}) });
+  },
   simplePanelOpen: false,
   setSimplePanelOpen: (simplePanelOpen) =>
     set(simplePanelOpen ? { simplePanelOpen, libraryOpen: false } : { simplePanelOpen }),

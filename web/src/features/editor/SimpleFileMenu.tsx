@@ -114,6 +114,7 @@ export function SimpleFileMenu({
   const hasSelection = useDiagramStore((s) => s.diagramSelection.length > 0);
   // A stale "selection" choice must not survive the selection being cleared.
   const area: ExportScope = scope === "selection" && !hasSelection ? "page" : scope;
+  const canvasChatCollapsed = useAppStore((s) => s.canvasChatCollapsed);
   const gridOn = useAppStore((s) => s.gridOn);
   const snapOn = useAppStore((s) => s.snapOn);
   const pageBackdrop = useAppStore((s) => s.pageBackdrop);
@@ -297,6 +298,7 @@ export function SimpleFileMenu({
       {row("View", "eye", () => toggle("view"), { expanded: open === "view" })}
       {open === "view" && (
         <div className="fm-subs">
+          {check("AI chat bar", !canvasChatCollapsed, () => useAppStore.getState().setCanvasChatCollapsed(!canvasChatCollapsed))}
           {check("Show grid", gridOn, () => useAppStore.getState().toggleGrid())}
           {check("Snap to grid", snapOn, () => useAppStore.getState().toggleSnap())}
           {check("Page backdrop", pageBackdrop, () => useAppStore.getState().togglePageBackdrop(),

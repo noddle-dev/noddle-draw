@@ -14,10 +14,14 @@ Errors are raised as plain domain exceptions; the api layer maps them to HTTP.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Collection
+from copy import deepcopy
 from dataclasses import replace
+from functools import wraps
 
+from app.domain.diagram_merge import merge_diagrams, pages_of
 from app.domain.ids import is_valid_id, new_id
 from app.domain.models import Document, DocumentMeta, DocumentVersion
 from app.domain.repository import DocumentRepository, VersionRepository
@@ -39,6 +43,10 @@ class DocumentNotFound(Exception):
     """Raised when a document id is malformed or does not exist."""
 
 
+class DocumentConflict(Exception):
+    """The board changed after the caller read it (``expected_updated_at``)."""
+
+
 class InvalidSvg(Exception):
     """Raised when uploaded/saved SVG cannot be sanitized/parsed."""
 
@@ -51,11 +59,28 @@ class VersionNotFound(Exception):
     """Raised when a version id does not exist for this document."""
 
 
+def _serialized_write(method):
+    """Run a read-modify-write under the service lock so a precondition check
+    (``expected_updated_at``) and the merge against live state can't race."""
+
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._write_lock:
+            return method(self, *args, **kwargs)
+
+    return call
+
+
 class DocumentService:
     def __init__(
         self, repo: DocumentRepository, versions: VersionRepository | None = None
     ) -> None:
         self._repo = repo
+        self._write_lock = threading.RLock()
+        # Live (unsaved) diagram per board while a collab room is open. Like the
+        # rooms themselves this is in-memory — another single-instance
+        # dependency (ADR: never scale replicas).
+        self._live: dict[str, dict | None] = {}
         # The file adapter implements both ports; a future DB split can inject
         # a distinct snapshot store without touching this service.
         self._versions: VersionRepository = versions or repo  # type: ignore[assignment]
@@ -99,18 +124,94 @@ class DocumentService:
             raise DocumentNotFound(doc_id)
         return doc
 
+    # ---- live collaboration state -------------------------------------------
+    # While a board's room is open, peers' unsaved state frames are merged into
+    # an in-memory "live" diagram so HTTP/MCP readers and writers see (and merge
+    # with) what people are doing right now, not just the last explicit save.
+
+    @_serialized_write
+    def get_live(self, doc_id: str) -> Document:
+        doc = self.get(doc_id)
+        return replace(doc, diagram=deepcopy(self._live.get(doc_id, doc.diagram)))
+
+    @_serialized_write
+    def begin_live(self, doc_id: str) -> None:
+        if doc_id not in self._live:
+            self._live[doc_id] = deepcopy(self.get(doc_id).diagram)
+
+    @_serialized_write
+    def end_live(self, doc_id: str) -> None:
+        self._live.pop(doc_id, None)
+
+    @_serialized_write
+    def apply_live_page(
+        self,
+        doc_id: str,
+        page_id: str | None,
+        incoming: dict,
+        base: dict | None = None,
+        removed_nodes=(),
+        removed_edges=(),
+    ) -> dict:
+        """Merge one page's live state frame into the board's live diagram.
+        With ``base`` (the sender's read base) only objects/fields the sender
+        changed are applied, so concurrent edits by others survive; without
+        it (legacy clients) the frame is the page's full state —
+        last-write-wins, as the protocol always was. Explicit tombstones
+        (``removed_*``) delete either way."""
+        current = self.get_live(doc_id).diagram
+        pages = pages_of(current) or [{"id": "p1", "name": "Page 1", "nodes": [], "edges": []}]
+        pid = page_id or pages[0]["id"]
+        page = next((p for p in pages if p["id"] == pid), None)
+        if page is None:
+            page = {"id": pid, "name": f"Page {len(pages) + 1}", "nodes": [], "edges": []}
+            pages.append(page)
+        if base is None:
+            merged: dict | None = {"nodes": deepcopy(incoming["nodes"]), "edges": deepcopy(incoming["edges"])}
+        else:
+            current_page = {"nodes": page.get("nodes", []), "edges": page.get("edges", [])}
+            merged = merge_diagrams(base, incoming, current_page)
+            if merged and "pages" in merged:
+                merged = merged["pages"][0]
+        page["nodes"] = [n for n in (merged or {}).get("nodes", []) if n["id"] not in removed_nodes]
+        ids = {n["id"] for n in page["nodes"]}
+        page["edges"] = [
+            e for e in (merged or {}).get("edges", [])
+            if e["id"] not in removed_edges and all(
+                not isinstance(e.get(end), dict) or not e[end].get("nodeId") or e[end]["nodeId"] in ids
+                for end in ("source", "target")
+            )
+        ]
+        self._live[doc_id] = self._validate_diagram({"pages": pages})
+        return deepcopy(page)
+
+    @_serialized_write
     def save(
         self,
         doc_id: str,
         raw_svg: str,
         diagram: object = _UNSET,
         author_name: str = "",
+        expected_updated_at: float | None = None,
+        base_diagram: object = _UNSET,
     ) -> DocumentMeta:
         """Overwrite a document's payload. ``diagram`` semantics: omitted →
         keep the stored one (old clients send svg only); ``None`` → clear;
         a dict → validate + replace. Every save also records a version
-        snapshot (coalesced against autosave spam, capped per document)."""
+        snapshot (coalesced against autosave spam, capped per document).
+
+        ``base_diagram`` (the diagram the caller last read) turns the save into
+        a 3-way MERGE onto the current live board: only objects/fields the
+        caller changed are written, so concurrent edits by others survive.
+        Without a base, ``expected_updated_at`` is an optimistic-concurrency
+        precondition (``DocumentConflict`` when the board moved on)."""
         existing = self.get(doc_id)
+        if (
+            base_diagram is _UNSET
+            and expected_updated_at is not None
+            and abs(existing.meta.updated_at - expected_updated_at) > 1e-6
+        ):
+            raise DocumentConflict("The board changed. Read it again and reapply the edit.")
         clean = self._sanitize(raw_svg)
         if diagram is _UNSET:
             new_diagram = existing.diagram
@@ -118,10 +219,17 @@ class DocumentService:
             new_diagram = None
         else:
             new_diagram = self._validate_diagram(diagram)  # type: ignore[arg-type]
+        if base_diagram is not _UNSET:
+            base = self._validate_diagram(base_diagram) if base_diagram is not None else None  # type: ignore[arg-type]
+            new_diagram = merge_diagrams(base, new_diagram, self.get_live(doc_id).diagram)
+            if new_diagram is not None:
+                new_diagram = self._validate_diagram(new_diagram)
         # A payload save must NEVER touch the access policy — carry every
         # meta field.
         meta = replace(existing.meta, updated_at=time.time())
         self._repo.save(Document(meta=meta, svg=clean, diagram=new_diagram))
+        if doc_id in self._live:
+            self._live[doc_id] = deepcopy(new_diagram)
         self._record_version(doc_id, clean, new_diagram, author_name)
         return meta
 
@@ -170,6 +278,7 @@ class DocumentService:
             overflow = existing[: len(existing) + 1 - _MAX_VERSIONS]
             self._versions.delete_versions(doc_id, [v.id for v in overflow])
 
+    @_serialized_write
     def update_meta(self, doc_id: str, name: str | None = None) -> DocumentMeta:
         """Rename (authorization happens in the api layer — this is pure
         state transition)."""
@@ -184,9 +293,11 @@ class DocumentService:
         )
         return meta
 
+    @_serialized_write
     def delete(self, doc_id: str) -> None:
         if not is_valid_id(doc_id):
             raise DocumentNotFound(doc_id)
+        self._live.pop(doc_id, None)
         self._repo.delete(doc_id)
 
     # ---- validation ---------------------------------------------------------
@@ -214,6 +325,8 @@ class DocumentService:
                 pages.append({
                     "id": str(pg.get("id") or f"p{i}"),
                     "name": str(pg.get("name") or f"Page {i + 1}")[:80],
+                    # Presentation visibility is durable page metadata.
+                    **({"hidden": True} if pg.get("hidden") is True else {}),
                     "nodes": nodes,
                     "edges": edges,
                 })

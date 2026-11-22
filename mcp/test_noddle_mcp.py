@@ -52,6 +52,10 @@ class FakeNoddle:
         self.patches: List[Dict[str, Any]] = []
         self.comments: List[Dict[str, Any]] = []
         self.ai_calls: List[Dict[str, Any]] = []
+        self.captures: List[Dict[str, Any]] = []
+        self.presence: List[Dict[str, Any]] = []
+        # Simulates a collaborator's live edit merged in by the real server.
+        self.merge_extra_node: Optional[Dict[str, Any]] = None
         self.auth_headers: List[str] = []
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -111,9 +115,31 @@ class FakeNoddle:
                 if method == "PUT" and sub == "":
                     body = self._body()
                     fake.puts.append(body)
-                    b["diagram"] = body["diagram"]
+                    b["diagram"] = json.loads(json.dumps(body["diagram"]))
+                    if fake.merge_extra_node and isinstance(b["diagram"], dict) and b["diagram"].get("pages"):
+                        b["diagram"]["pages"][0]["nodes"].append(fake.merge_extra_node)
                     b["meta"]["updated_at"] += 1
                     return self._send(200, b["meta"])
+                if method == "POST" and sub == "/capture":
+                    body = self._body()
+                    fake.captures.append(body)
+                    exp = body.get("expected_updated_at")
+                    if exp is not None and exp != b["meta"]["updated_at"]:
+                        return self._send(409, {"detail": "The board changed. Read it again before capture."})
+                    return self._send(200, {
+                        "png_base64": "iVBORw0KGgo=", "width": 100, "height": 80, "scale": 1,
+                        "renderer": "editor-react", "visual_validation": "pending_image_inspection",
+                        "id": m.group(1), "page_id": body.get("page_id") or "p1",
+                        "updated_at": b["meta"]["updated_at"], "scope": "diagram_page",
+                        "edge_routes": {"e": [[x, 30] for x in range(120, 601, 6)]}})
+                if method == "POST" and sub == "/presence":
+                    body = self._body()
+                    fake.presence.append(body)
+                    joined = {"name": body["name"], "color": "#7c3aed", "kind": "agent"}
+                    if "claude" in body["name"].lower():
+                        joined["icon"] = "claude"
+                    return self._send(200, {"id": m.group(1), "joined_as": joined,
+                                            "live_viewers": True, "visible_for_seconds": 300})
                 if method == "PATCH" and sub == "":
                     body = self._body()
                     fake.patches.append(body)
@@ -365,10 +391,128 @@ class StdioServerTest(_Harness):
         self.assertEqual(self.fake.puts[-1]["diagram"], diagram)  # pass-through, curved kept
         self.assertEqual(self.fake.puts[-1]["svg"], "<svg/>")
         self.assertEqual(self.fake.puts[-1]["author_name"], "Test agent")
+        self.assertIs(self.fake.puts[-1]["agent"], True)
+        # The read base from get_board rides along so the server can 3-way merge.
+        self.assertIn("base_diagram", self.fake.puts[-1])
+        self.assertIn("post_save_check", r["structuredContent"])
+        self._check_output_schema("update_board", r["structuredContent"])
+        # A stale updated_at that matches a cached read base is merged, not refused.
         stale = self.mcp.call("update_board", {"doc_id": DOC, "diagram": diagram,
                                                "expected_updated_at": before["updated_at"]})["result"]
+        self.assertFalse(stale["isError"], stale)
+        self.assertIn("base_diagram", self.fake.puts[-1])
+        # No read base known for that revision ⇒ optimistic concurrency still refuses.
+        unknown = self.mcp.call("update_board", {"doc_id": DOC, "diagram": diagram,
+                                                 "expected_updated_at": 0.5})["result"]
+        self.assertTrue(unknown["isError"])
+        self.assertIn("conflict", unknown["content"][0]["text"])
+
+    def test_edit_revision_sends_the_read_base_and_expires_cleanly(self) -> None:
+        read = self.mcp.call("get_board", {"doc_id": DOC})["result"]["structuredContent"]
+        self.assertRegex(read["edit_revision"], r"^[0-9a-f]{32}$")
+        original = read["diagram"]
+        desired = json.loads(json.dumps(original))
+        desired["pages"][0]["nodes"][0]["text"] = "edited"
+        r = self.mcp.call("update_board", {"doc_id": DOC, "diagram": desired,
+                                           "edit_revision": read["edit_revision"]})["result"]
+        self.assertFalse(r["isError"], r)
+        self.assertEqual(self.fake.puts[-1]["base_diagram"], original)
+        bogus = self.mcp.call("update_board", {"doc_id": DOC, "diagram": desired,
+                                               "edit_revision": "0" * 32})["result"]
+        self.assertTrue(bogus["isError"])
+        self.assertIn("expired", bogus["content"][0]["text"])
+
+    def test_post_save_check_reports_collaborators_manual_edits(self) -> None:
+        read = self.mcp.call("get_board", {"doc_id": DOC})["result"]["structuredContent"]
+        self.fake.merge_extra_node = {"id": "human", "kind": "rect", "x": 500, "y": 500, "w": 100,
+                                      "h": 60, "text": "", "fill": "#fff", "stroke": "#000"}
+        desired = json.loads(json.dumps(read["diagram"]))
+        desired["pages"][0]["nodes"].append({"id": "mine", "kind": "rect", "x": 0, "y": 200, "w": 160,
+                                             "h": 60, "text": "Mine", "fill": "#fff", "stroke": "#000"})
+        r = self.mcp.call("update_board", {"doc_id": DOC, "diagram": desired,
+                                           "edit_revision": read["edit_revision"]})["result"]
+        check = r["structuredContent"]["post_save_check"]
+        self.assertEqual(check["manual_changes"], [{"page_id": "p1", "change": "added", "ids": ["human"],
+                                                    "label": "<empty rect>"}])
+        stray = [i for i in check["issues"] if i["type"] == "stray_shape"]
+        self.assertEqual([(i["ids"], i["yours"]) for i in stray], [(["human"], False)])
+        self.assertIn("never revert", check["next_step"])
+
+    def test_clone_diagram_keeps_originals_and_remaps_ids(self) -> None:
+        self.fake.boards[DOC]["diagram"] = {"pages": [{"id": "p1", "name": "First", "nodes": [
+            {"id": "a", "kind": "rect", "x": 0, "y": 0, "w": 100, "h": 60, "text": "A", "groupId": "g1"},
+            {"id": "b", "kind": "rect", "x": 200, "y": 0, "w": 100, "h": 60, "text": "B", "groupId": "g1"},
+        ], "edges": [{"id": "e", "source": {"kind": "floating", "nodeId": "a"},
+                      "target": {"kind": "free", "point": {"x": 180, "y": 30}},
+                      "waypoints": [{"x": 120, "y": 30}], "labels": [{"id": "lbl", "t": .5, "text": "go"}]}]},
+            {"id": "p2", "name": "Untouched", "nodes": [], "edges": []}]}
+        before = json.loads(json.dumps(self.fake.boards[DOC]["diagram"]))
+        multi = self.mcp.call("clone_diagram", {"doc_id": DOC, "expected_updated_at": 2.0})["result"]
+        self.assertTrue(multi["isError"])
+        self.assertIn("page_id", multi["content"][0]["text"])
+        r = self.mcp.call("clone_diagram", {"doc_id": DOC, "page_id": "p1",
+                                            "expected_updated_at": 2.0})["result"]
+        self.assertFalse(r["isError"], r)
+        out = r["structuredContent"]
+        self._check_output_schema("clone_diagram", out)
+        sent = self.fake.puts[-1]
+        self.assertEqual(sent["base_diagram"], before)
+        page = sent["diagram"]["pages"][0]
+        self.assertEqual(page["nodes"][:2], before["pages"][0]["nodes"])
+        self.assertEqual(sent["diagram"]["pages"][1], before["pages"][1])
+        mapping = out["node_id_map"]
+        self.assertEqual(page["nodes"][2]["id"], mapping["a"])
+        self.assertGreaterEqual(page["nodes"][2]["x"], 420)
+        self.assertEqual(page["nodes"][2]["groupId"], page["nodes"][3]["groupId"])
+        self.assertNotEqual(page["nodes"][2]["groupId"], "g1")
+        edge = page["edges"][1]
+        self.assertEqual(edge["source"]["nodeId"], mapping["a"])
+        self.assertEqual(edge["target"]["point"]["x"], 180 + out["offset"]["x"])
+        self.assertEqual(edge["waypoints"][0]["x"], 120 + out["offset"]["x"])
+        self.assertNotEqual(edge["labels"][0]["id"], "lbl")
+        self.assertNotIn("fedcba987654", self.fake.boards)  # never a new board
+
+    def test_capture_board_returns_an_image_block(self) -> None:
+        r = self.mcp.call("capture_board", {"doc_id": DOC, "page_id": "p1"})["result"]
+        self.assertFalse(r["isError"], r)
+        self.assertEqual([c["type"] for c in r["content"]], ["text", "image"])
+        self.assertEqual(r["content"][1]["mimeType"], "image/png")
+        sc = r["structuredContent"]
+        self.assertNotIn("png_base64", sc)
+        self.assertNotIn("edge_routes", sc)  # lint input, not part of the picture
+        self.assertEqual(sc["visual_validation"], "pending_image_inspection")
+        self._check_output_schema("capture_board", sc)
+        stale = self.mcp.call("capture_board", {"doc_id": DOC, "expected_updated_at": 1.0})["result"]
         self.assertTrue(stale["isError"])
-        self.assertIn("conflict", stale["content"][0]["text"])
+        self.assertIn("409", stale["content"][0]["text"])
+
+    def test_join_board_announces_the_agent_without_writing(self) -> None:
+        r = self.mcp.call("join_board", {"doc_id": DOC})["result"]
+        self.assertFalse(r["isError"], r)
+        self.assertEqual(self.fake.presence, [{"name": "Test agent"}])
+        self.assertEqual(r["structuredContent"]["joined_as"]["kind"], "agent")
+        self.assertNotIn("icon", r["structuredContent"]["joined_as"])
+        self.assertTrue(r["structuredContent"]["live_viewers"])
+        self.assertEqual(self.fake.puts, [])  # joining never writes
+
+    def test_lint_board_reports_layout_and_route_issues(self) -> None:
+        box = lambda i, x: {"id": i, "kind": "rect", "x": x, "y": 0, "w": 120, "h": 60, "text": i,
+                            "fill": "#fff", "stroke": "#000"}
+        self.fake.boards[DOC]["diagram"] = {"pages": [{"id": "p1", "name": "P", "nodes": [
+            box("a", 0), box("mid", 300), box("b", 600), box("dup", 602)], "edges": [
+            {"id": "e", "source": {"kind": "port", "nodeId": "a"}, "target": {"kind": "port", "nodeId": "b"}},
+            {"id": "x", "source": {"kind": "port", "nodeId": "a"}, "target": {"kind": "port", "nodeId": "gone"}}]}]}
+        r = self.mcp.call("lint_board", {"doc_id": DOC})["result"]
+        self.assertFalse(r["isError"], r)
+        lint = r["structuredContent"]
+        self._check_output_schema("lint_board", lint)
+        found = {(i["type"], tuple(i["ids"])) for i in lint["issues"]}
+        self.assertIn(("edge_crosses_shape", ("e", "mid")), found)
+        self.assertIn(("dangling_edge", ("x",)), found)
+        self.assertEqual(lint["routes_checked"], ["p1"])
+        self.assertTrue(all(i["fix"] for i in lint["issues"]))
+        self.assertGreaterEqual(lint["error_count"], 2)
+        self.assertIn("SELF-REVIEW", lint["checklist"])
 
     def test_view_only_link_write_is_tool_error(self) -> None:
         r = self.mcp.call("update_board", {"doc_id": VIEW_ONLY, "diagram": {"nodes": [], "edges": []}})

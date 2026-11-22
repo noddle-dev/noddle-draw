@@ -47,12 +47,12 @@ function saveEnabledLibs(libs: Set<string>): void {
  * sticky notes carry a fill/stroke color). Exported: the Simple island's
  * draw tool arms the same entry semantics. */
 export function entryInit(entry: PaletteEntry): Partial<DiagramNode> {
-  const init: Partial<DiagramNode> = {};
+  const init: Partial<DiagramNode> = { ...entry.prototype };
   if (entry.iconKey) { init.iconKey = entry.iconKey; init.text = entry.label; }
   if (entry.fill) init.fill = entry.fill;
   if (entry.stroke) init.stroke = entry.stroke;
   if (entry.text) init.text = entry.text;
-  return init;
+  return Object.assign(init, entry.prototype ?? {});
 }
 
 export function addNodeAtCenter(entry: PaletteEntry) {
@@ -225,7 +225,7 @@ function ShapesTab() {
   const libSections = new Set(STENCIL_LIBRARIES.map((l) => l.section));
   const inUse = inUseEntries(Object.values(nodes));
   const sections: PaletteSection[] = [
-    ...(inUse.length ? [{ name: "In use", entries: inUse }] : []),
+    ...(inUse.length ? [{ name: "Shapes in use", entries: inUse }] : []),
     ...SHAPE_SECTIONS.filter(
       (s) => !libSections.has(s.library ?? s.name) || libs.has(s.library ?? s.name) || q.length > 0,
     ),

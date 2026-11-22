@@ -4,6 +4,7 @@
  * `frontend/editor.js`.
  */
 import { useCallback } from "react";
+import { embedFonts } from "../../shared/fonts";
 import { useEditorStore } from "../../state/editorStore";
 import { usePagesStore } from "../../state/pagesStore";
 
@@ -79,7 +80,9 @@ function svgToPngBlob(
   h: number,
   scale: number,
 ): Promise<Blob | null> {
-  return new Promise((resolve) => {
+  // Embed the bundled fonts first: an SVG drawn into <img> can't reach the
+  // page's @font-face rules, so labels would otherwise fall back to a system face.
+  return withFonts(svg).then((svg) => new Promise<Blob | null>((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
     img.onload = () => {
@@ -102,7 +105,12 @@ function svgToPngBlob(
       resolve(null);
     };
     img.src = url;
-  });
+  }));
+}
+
+/** `embedFonts`, but never fails an export because a font couldn't load. */
+function withFonts(svg: string): Promise<string> {
+  return embedFonts(svg).catch(() => svg);
 }
 
 /** draw.io-style export framing: whole page, cropped to content, or selection. */
@@ -144,12 +152,12 @@ export function copyPngToClipboard(): void {
 }
 
 export function useExport() {
-  const exportSvg = useCallback((scope: ExportScope = "page") => {
+  const exportSvg = useCallback(async (scope: ExportScope = "page") => {
     const st = useEditorStore.getState();
     const svg = st.currentBoardSvg({ scope });
     if (!svg) return;
     download(
-      new Blob([svg], { type: "image/svg+xml" }),
+      new Blob([await withFonts(svg)], { type: "image/svg+xml" }),
       (st.docId || "drawing") + SUFFIX[scope] + ".svg",
     );
   }, []);

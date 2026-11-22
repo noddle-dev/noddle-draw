@@ -1,3 +1,4 @@
+import { DEFAULT_STROKE_WIDTH, DEFAULT_CORNER_RADIUS } from "../../../editor-core/diagram/palette";
 /**
  * features/library/builtins/_kit — authoring helpers for the built-in packs.
  *
@@ -6,8 +7,8 @@
  *   const e = link(a, b, { label: "Yes" });                  // an edge
  *   item("id", "Name", ["tags"], [a, b], [e]);               // the finisher
  *
- * The helpers apply the house style (hand-drawn `sketch`, radius 12 on
- * rect-like kinds, 2px strokes, bold ink labels) and take colours ONLY from
+ * The helpers apply the house style (hand-drawn `sketch`, radius 4 on
+ * rect-like kinds, 2.5px strokes, bold ink labels) and take colours ONLY from
  * LIB_PALETTE — no item file ever inlines a hex. `item()` re-bases the
  * fragment to (0,0), snaps it to the 4px grid, renumbers ids n1…/e1… and
  * computes the bbox, so authors can lay items out in any local coordinates.
@@ -60,13 +61,13 @@ export function box(
     text,
     fill: solid ? p.stroke : paper ? WHITE : p.fill,
     stroke: p.stroke,
-    strokeWidth: 2,
+    strokeWidth: DEFAULT_STROKE_WIDTH,
     sketch: true,
     bold: true,
     fontSize: 16,
     textColor: solid ? WHITE : LIB_INK,
   };
-  if (RECT_LIKE.has(kind)) n.cornerRadius = 12;
+  if (RECT_LIKE.has(kind)) n.cornerRadius = DEFAULT_CORNER_RADIUS;
   return { ...n, ...rest };
 }
 
@@ -149,7 +150,7 @@ export function link(a: End, b: End, opts: LinkOpts = {}): DiagramEdge {
     target: attach(b, opts.to, opts.toAt),
     routing: opts.routing ?? "elbow",
     stroke: opts.stroke ?? LINE,
-    strokeWidth: opts.strokeWidth ?? 2,
+    strokeWidth: opts.strokeWidth ?? DEFAULT_STROKE_WIDTH,
     endArrow: head !== "none",
     startArrow: tail !== "none",
     endHead: head,
@@ -251,7 +252,7 @@ export function icon(iconKey: string, x: number, y: number, caption: string, siz
     text: caption,
     fill: WHITE,
     stroke: LIB_INK,
-    strokeWidth: 2,
+    strokeWidth: DEFAULT_STROKE_WIDTH,
     fontSize: 13,
   };
 }

@@ -1,3 +1,4 @@
+import { DEFAULT_STROKE_WIDTH } from "../../editor-core/diagram/palette";
 /**
  * features/diagram/DiagramLayer — the diagram render layer, mounted INSIDE the
  * Canvas camera group so it shares the same pan/zoom transform.
@@ -145,7 +146,7 @@ export function DiagramLayer() {
           : { kind: "free", point: preview.cursor },
       routing: "elbow",
       stroke: ACCENT,
-      strokeWidth: 2,
+      strokeWidth: DEFAULT_STROKE_WIDTH,
       endArrow: true,
       startArrow: false,
       animated: false,

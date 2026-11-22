@@ -42,9 +42,16 @@ import {
   useAppStore,
 } from "./appStore";
 import { getIdentity } from "./collabStore";
+import { DEFAULT_STROKE_WIDTH, DEFAULT_CORNER_RADIUS } from "../editor-core/diagram/palette";
 import { useDiagramStore } from "./diagramStore";
 import { onPageSwitch, usePagesStore } from "./pagesStore";
 import { resetHistory, useDiagramHistory } from "./diagramHistory";
+
+/** Last diagram this tab loaded or saved for a doc — sent as `base_diagram`
+ * so the server 3-way merges a save over edits it never saw. */
+let savedDiagramBase: unknown = undefined;
+let savedDiagramDoc: string | null = null;
+let saveSequence = 0, savedSequence = 0;
 
 /** The default pen: Excalidraw-like ink — pressure thinning + tapered ends. */
 export const DEFAULT_BRUSH: PenBrush = { type: "pen", thinning: 0.5, smoothing: 0.4, taper: true, softness: 0 };
@@ -56,15 +63,16 @@ export const DEFAULT_BRUSH: PenBrush = { type: "pen", thinning: 0.5, smoothing: 
  * their own fill; `drawStyle` (the user's picks) wins over both.
  */
 export const DRAW_STYLE_DEFAULTS: Partial<DiagramNode> = {
-  // House style (shared with the commercial edition): hand-drawn, rounded,
-  // big bold label.
+  // House style (shared with the commercial edition): Inter medium, a
+  // slightly stronger border and subtle rounding.
   stroke: "#2d3142",
   fill: "transparent",
-  strokeWidth: 2,
-  sketch: true,
-  cornerRadius: 12,
+  strokeWidth: DEFAULT_STROKE_WIDTH,
+  sketch: false,
+  fontFamily: "sans",
+  cornerRadius: DEFAULT_CORNER_RADIUS,
   fontSize: 28,
-  bold: true,
+  bold: false,
 };
 
 export type StatusKind = "" | "ok" | "error";
@@ -665,6 +673,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // payload is `{pages:[…]}` (or legacy `{nodes,edges}` → 1 page). The
       // active page's nodes/edges land in diagramStore. An svg-only upload has
       // no diagram → no pages.
+      savedDiagramDoc = id;
+      savedDiagramBase = structuredClone(diagram);
       const payload = diagram as unknown as
         | { pages?: unknown[]; nodes?: unknown[]; edges?: unknown[] }
         | null;
@@ -768,7 +778,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       } else if (nodeCount) {
         diagram = { nodes: Object.values(ds.nodes), edges: Object.values(ds.edges) };
       }
-      await api.save(docId, get().currentBoardSvg(), diagram as never, getIdentity().name);
+      const submitted = structuredClone(diagram);
+      const sequence = ++saveSequence;
+      await api.save(docId, get().currentBoardSvg(), submitted as never, getIdentity().name,
+        (savedDiagramDoc === docId ? savedDiagramBase : undefined) as never);
+      if (get().docId === docId && sequence > savedSequence) {
+        savedSequence = sequence;
+        savedDiagramDoc = docId;
+        savedDiagramBase = submitted;
+      }
       const when = new Date().toLocaleTimeString();
       set({
         dirty: false,

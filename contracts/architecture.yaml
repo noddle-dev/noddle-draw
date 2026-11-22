@@ -98,7 +98,15 @@ ownership:
     role: persistence ports (Protocols) the adapters implement
   - file: backend/app/services/documents.py
     owner: AGENT-DOMAIN
-    role: sanitize-before-store, diagram validation, version coalescing rules
+    role: sanitize-before-store, diagram validation, version coalescing rules,
+      in-memory live diagram per open room, merge-on-save
+  - file: backend/app/domain/diagram_merge.py
+    owner: AGENT-DOMAIN
+    role: pure 3-way diagram merge (base vs desired vs current, per field)
+  - file: backend/app/services/diagram_capture.py
+    owner: AGENT-ADAPTER
+    role: offline CSP-locked headless-Chromium PNG capture of one page
+      through the editor's own renderer bundle (web/dist/capture.js)
   - file: backend/app/services/comments.py
     owner: AGENT-DOMAIN
     role: comment thread rules
@@ -236,8 +244,12 @@ persistence:
     tables from the retired accounts build are left untouched but no longer
     created
   concurrency: >-
-    None — last write wins by design, at both the HTTP layer (PUT overwrite)
-    and the collab layer (full-state frames). No optimistic locking.
+    Last write wins PER FIELD. Saves and collab frames that carry their read
+    base (base_diagram / baseDiagram) are 3-way merged onto the in-memory
+    live diagram, so concurrent edits to different objects, fields and pages
+    survive; base-less saves and frames replace (legacy full-state LWW).
+    expected_updated_at is an optional optimistic-concurrency precondition
+    for base-less saves (409). Writes are serialized by a service lock.
   blob_store: >-
     Optional S3-compatible bucket (services/object_storage.py) receives
     rotated log segments only — board data never leaves the DB/files.
@@ -509,10 +521,13 @@ decisions:
     status: decided
     date: "2026-08-16"
     choice: >-
-      /ws/documents/{doc_id} exchanges whole-diagram state frames; the room
-      keeps the latest frame for late joiners; clientId dedups reconnects;
-      durable persistence stays explicit (Save → PUT). The docstring of
-      api/collab.py is the wire spec.
+      /ws/documents/{doc_id} exchanges whole-page state frames; clientId
+      dedups reconnects; durable persistence stays explicit (Save → PUT).
+      Amended 2026-11-22: frames and saves may carry their read base, and the
+      server then merges only the changed fields into an in-memory live
+      diagram (domain/diagram_merge.py) — still LWW, per field, no CRDT/OT.
+      HTTP/MCP saves publish into the room. The docstring of api/collab.py is
+      the wire spec.
     rationale: >-
       Diagrams are small (≤1MB) and edits are coarse; full-state LWW is
       debuggable, dependency-free and good enough — CRDT/OT buys conflict
@@ -522,8 +537,10 @@ decisions:
       - CRDT (Yjs et al.) — a large dependency and data model rewrite
       - Op-based diffs — ordering/rebase complexity without CRDT guarantees
     consequences:
-      - Simultaneous edits can drop the slower writer's keystrokes between
-        frames (accepted; undo history is per-object diffs to compensate)
+      - Simultaneous edits to the SAME field keep the last arriving value
+        (accepted; undo history is per-object diffs to compensate)
+      - The live diagram is in-memory — one more single-instance dependency;
+        unsaved live state is dropped when the last socket leaves
       - The 1MB diagram cap doubles as the WS frame budget (1.2MB cap)
     affects: [backend/app/api/collab.py]
   - id: ADR-011

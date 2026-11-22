@@ -1,3 +1,4 @@
+import { DEFAULT_STROKE_WIDTH } from "../../editor-core/diagram/palette";
 /**
  * features/canvas — the SVG stage (<svg> with camera + content + overlay) plus
  * all pointer interactions (pan, select, move, resize, marquee, wheel-zoom,
@@ -11,6 +12,7 @@
  */
 import { useEffect, useRef } from "react";
 import {
+  WHEEL_ZOOM_SPEED, ZOOM_BUTTON_STEP, ZOOM_KEY_STEP,
   matrixToString,
   moveMatrix,
   ownMatrix,
@@ -525,7 +527,7 @@ export function Canvas() {
             target: targetOf(ev),
             routing: "straight",
             stroke: "#2d3142", // same ink as shapes (Excalidraw)
-            strokeWidth: 2,
+            strokeWidth: DEFAULT_STROKE_WIDTH,
             endArrow: true,
             startArrow: false,
             animated: false,
@@ -543,6 +545,12 @@ export function Canvas() {
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      if (useAppStore.getState().presenting) {
+        e.stopPropagation(); // presentation gestures never reach editable shapes
+        if (e.button === 0 && s().tool === "laser" && !spaceDownRef.current) startLaser(e);
+        else if (e.button === 0 || e.button === 1) startPan(e);
+        return;
+      }
       // Space-pan overrides EVERYTHING — grips, shapes, ports all step aside
       // (they check panState themselves) and the hand drags the page.
       // An armed draw/text tool wins over whatever is under the pointer
@@ -632,7 +640,7 @@ export function Canvas() {
       // horizontal), ⌘/Ctrl+wheel — and the trackpad pinch, which browsers
       // report as a ctrlKey wheel — ZOOMS at the cursor.
       if (e.ctrlKey || e.metaKey) {
-        const factor = Math.exp(-e.deltaY * 0.0015);
+        const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_SPEED);
         s().zoomBy(factor, e.clientX, e.clientY);
         return;
       }
@@ -651,6 +659,7 @@ export function Canvas() {
     const isText = (n: Node | null) =>
       !!n && n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName.replace(/^.*:/, "") === "text";
     const onDblClick = (e: MouseEvent) => {
+      if (useAppStore.getState().presenting) { e.stopPropagation(); return; }
       // Diagram nodes/edges own their own dblclick (inline text edit).
       if ((e.target as Element).closest("#diagram-layer")) return;
       let node: Node | null = document.elementFromPoint(e.clientX, e.clientY);
@@ -706,6 +715,7 @@ export function Canvas() {
       );
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      if (useAppStore.getState().presenting) return;
       if (e.code === "Space") {
         spaceDownRef.current = true;
         if (!typingInField()) {
@@ -798,10 +808,10 @@ export function Canvas() {
           ids.forEach((id) => ds.updateNode(id, patch));
         }
       } else if (meta && ["=", "+", "-", "_"].includes(e.key)) {
-        // ⌘/Ctrl +/− zoom the BOARD by 20% (instead of the browser page).
+        // ⌘/Ctrl +/− zoom the BOARD with the shared faster key step (instead of the browser page).
         e.preventDefault();
         const zoomIn = e.key === "=" || e.key === "+";
-        s().zoomBy(zoomIn ? 1.2 : 1 / 1.2);
+        s().zoomBy(zoomIn ? ZOOM_KEY_STEP : 1 / ZOOM_KEY_STEP);
       } else if (meta && e.key === "0") {
         // ⌘/Ctrl 0 — fit the board (matches the browser's reset-zoom muscle memory)
         e.preventDefault();
@@ -950,11 +960,11 @@ function ZoomWidget() {
   const fitToView = useEditorStore((s) => s.fitToView);
   return (
     <div className="zoom-widget">
-      <button title="Zoom out" onClick={() => zoomBy(0.8)}>
+      <button title="Zoom out" onClick={() => zoomBy(1 / ZOOM_BUTTON_STEP)}>
         −
       </button>
       <span className="zoom-label">{Math.round(cam.z * 100)}%</span>
-      <button title="Zoom in" onClick={() => zoomBy(1.25)}>
+      <button title="Zoom in" onClick={() => zoomBy(ZOOM_BUTTON_STEP)}>
         +
       </button>
       <span className="sep" />

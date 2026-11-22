@@ -15,6 +15,7 @@
  *                    canvas's own bottom-right zoom widget is CSS-hidden.
  * EditorScreen mounts this over the canvas (never in embeds/present mode).
  */
+import { ZOOM_BUTTON_STEP } from "../../editor-core";
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../state/appStore";
 import { useEditorStore } from "../../state/editorStore";
@@ -593,11 +594,11 @@ export function SimpleChrome() {
       {/* ---- bottom-left: zoom + undo/redo islands ---- */}
       <div className="simple-bottom-left">
         <div className="simple-island simple-zoom">
-          <button title="Zoom out" aria-label="Zoom out" onClick={() => zoomBy(0.8)}>−</button>
+          <button title="Zoom out" aria-label="Zoom out" onClick={() => zoomBy(1 / ZOOM_BUTTON_STEP)}>−</button>
           <button className="pct" title="Fit to view" aria-label="Fit to view" onClick={fitToView}>
             {Math.round(cam.z * 100)}%
           </button>
-          <button title="Zoom in" aria-label="Zoom in" onClick={() => zoomBy(1.25)}>+</button>
+          <button title="Zoom in" aria-label="Zoom in" onClick={() => zoomBy(ZOOM_BUTTON_STEP)}>+</button>
         </div>
         <div className="simple-island simple-zoom">
           <button title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo} onClick={undo}>↶</button>
