@@ -5,10 +5,13 @@
  *   • a diagram node  → diagramStore.updateNode (name/pos/size/fill/stroke/width)
  *   • a diagram edge  → diagramStore.updateEdge / setEdgeLabel (label/route/color)
  *   • an uploaded-SVG object → attribute edits via editorStore begin/commit
- *   • nothing selected → board & page semantics card + page settings (grid/snap
- *     real) + a diagram theme that recolours every node/edge.
- * Single nodes/edges also get a collapsible "Semantics" section (object
- * `meta` — see SemanticFields.ObjectMetaEditor).
+ *   • nothing selected → the LIVE board overview first (SemanticOverview:
+ *     computed summary, zones, flows; "Edit metadata" toggles the board/page
+ *     form) + page settings (grid/snap real) + a diagram theme that recolours
+ *     every node/edge.
+ * Single nodes/edges also get a "Semantics" section (object `meta` — see
+ * SemanticFields.ObjectMetaEditor), collapsed unless the object already
+ * carries meaningful meta.
  */
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -25,6 +28,7 @@ import {
   THEMES,
 } from "./data";
 import { BoardSemanticsForm, ObjectMetaEditor } from "./SemanticFields";
+import { CopyForAIButton, SemanticOverview, useLiveSemanticSummary } from "./SemanticOverview";
 import { hasSemanticMeta } from "../../editor-core/diagram/semantics";
 
 // Partial: only the common kinds get a bespoke glyph/label; the rest fall back
@@ -546,19 +550,22 @@ function PageSettings() {
 
   return (
     <div className="props2">
-      {/* Board overview — a warm hello instead of the old dashed scold. */}
-      <div className="board-hello">
-        <BoardDoodle />
-        <div className="t">Nothing selected</div>
-        <div className="d">Click a shape to style it — meanwhile, here's your board.</div>
-        <div className="stat-chips">
-          <span className="stat"><b>{nodeCount}</b> shapes</span>
-          <span className="stat"><b>{edgeCount}</b> connectors</span>
-          <span className="stat"><b>{pageCount}</b> {pageCount === 1 ? "page" : "pages"}</span>
+      {/* A board with content opens on its live semantic overview; an empty
+          one keeps the warm hello. */}
+      {nodeCount === 0 && (
+        <div className="board-hello">
+          <BoardDoodle />
+          <div className="t">Nothing selected</div>
+          <div className="d">Click a shape to style it — meanwhile, here's your board.</div>
+          <div className="stat-chips">
+            <span className="stat"><b>{nodeCount}</b> shapes</span>
+            <span className="stat"><b>{edgeCount}</b> connectors</span>
+            <span className="stat"><b>{pageCount}</b> {pageCount === 1 ? "page" : "pages"}</span>
+          </div>
         </div>
-      </div>
+      )}
 
-      <BoardSemanticsCard />
+      <BoardOverviewCard empty={nodeCount === 0} />
 
       <div className="props-label">Page</div>
       <div className="prop-row">
@@ -618,22 +625,27 @@ function PageSettings() {
   );
 }
 
-/** Nothing selected: the board's semantic description, compact + collapsible
- * (open by default only when something is already written). */
-function BoardSemanticsCard() {
+/** Nothing selected: the LIVE semantic overview of the whole page first
+ * (zones, components, flows — computed, so it has value on any board), with
+ * an "Edit metadata" toggle for the board/page summary, category and tags.
+ * An empty page opens straight on the metadata form. */
+function BoardOverviewCard({ empty }: { empty: boolean }) {
   const readOnly = useEditorStore((s) => s.myRole === "viewer");
-  const hasAny = usePagesStore(
-    (s) => !!s.metadata || !!s.pages.find((p) => p.id === s.activeId)?.metadata,
-  );
-  const [open, setOpen] = useState(hasAny);
+  const [editing, setEditing] = useState(false);
+  const summary = useLiveSemanticSummary();
+  const showForm = editing || empty;
   return (
-    <div className={`sem-card${open ? " open" : ""}`}>
-      <button type="button" className="sem-card-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
-        Board &amp; page semantics
-        {!open && hasAny && <span className="sem-dot" aria-hidden="true" />}
-      </button>
-      {open && <BoardSemanticsForm readOnly={readOnly} />}
+    <div className="sem-card open sov-card">
+      <div className="sov-card-head">
+        <span className="sov-card-t">{empty ? "Board semantics" : "Board overview"}</span>
+        {!empty && <CopyForAIButton summary={summary} compact />}
+        {!empty && (
+          <button type="button" className={`sov-edit${editing ? " on" : ""}`} aria-pressed={editing} onClick={() => setEditing(!editing)}>
+            {editing ? "Done" : readOnly ? "Metadata" : "Edit metadata"}
+          </button>
+        )}
+      </div>
+      {showForm ? <BoardSemanticsForm readOnly={readOnly} /> : <SemanticOverview summary={summary} />}
     </div>
   );
 }
