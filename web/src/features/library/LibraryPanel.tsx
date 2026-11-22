@@ -20,6 +20,7 @@ import { useMyShapesStore } from "../../state/myShapesStore";
 import { canvasCenterPoint, startFragmentDrag } from "../../state/canvasDrop";
 import { BUILTIN_PACKS, LIBRARY_SHELVES } from "./builtins";
 import { LibraryThumb } from "./LibraryThumb";
+import { inUseEntries } from "../diagram";
 import { LIB_PALETTE } from "./palette";
 import type { LibraryItem, LibraryPack } from "./types";
 
@@ -121,6 +122,7 @@ const SHELF_ORDER = LIBRARY_SHELVES.flatMap((s) => s.packs.map((p) => p.id));
 export function LibraryPanel() {
   const setLibraryOpen = useAppStore((s) => s.setLibraryOpen);
   const myShapes = useMyShapesStore((s) => s.shapes);
+  const boardNodes = useDiagramStore((s) => s.nodes);
   const canSave = useDiagramStore((s) => s.diagramSelection.some((id) => s.nodes[id]));
   const [query, setQuery] = useState("");
   // Two-level navigation (one row each, never a chip wall): a SHELF tab
@@ -145,6 +147,14 @@ export function LibraryPanel() {
   const [packId, setPackId] = useState<string | null>(null); // null = whole shelf
   const searchRef = useRef<HTMLInputElement>(null);
   const q = query.trim().toLowerCase();
+  const inUse = inUseEntries(Object.values(boardNodes)).filter((entry) => matches({ name: entry.label }, q)).map((entry, i): LibraryItem => {
+    const prototype = entry.prototype ?? {};
+    const w = prototype.w ?? 120, h = prototype.h ?? 80;
+    return { id: `in-use-${i}`, name: entry.label, tags: [], w, h, edges: [], nodes: [{
+      id: "shape", kind: entry.kind, x: 0, y: 0, w, h, text: "", fill: "#ffffff",
+      stroke: "#2d3142", strokeWidth: 1, ...prototype,
+    }] };
+  });
   const shelfDef = LIBRARY_SHELVES.find((s) => s.id === shelf);
 
   // A search always spans the WHOLE library (tabs only scope browsing).
@@ -160,8 +170,8 @@ export function LibraryPanel() {
   // My library: its own tab always (the empty-state hint lives there); on
   // All / in search results only when it actually has something to show.
   const showMine = shelf === "mine" && !q ? true : (q || shelf === "all") && mine.length > 0;
-  const empty = packs.length === 0 && !(showMine && mine.length > 0);
-  const resultCount = packs.reduce((n, p) => n + p.items.length, 0) + mine.length;
+  const empty = packs.length === 0 && !(showMine && mine.length > 0) && !inUse.length;
+  const resultCount = packs.reduce((n, p) => n + p.items.length, 0) + mine.length + inUse.length;
 
   // A drop lands exactly where released; a click/keyboard insert starts at
   // the canvas centre but slides to the nearest free spot, so adding several
@@ -273,6 +283,16 @@ export function LibraryPanel() {
       )}
 
       <div className="ed-panel-scroll lib-scroll">
+        {inUse.length > 0 && <section className="lib-section">
+          <div className="lib-section-head"><span className="nm">Shapes in use</span><span className="ct">{inUse.length}</span></div>
+          <div className="shape-grid2">
+            {inUse.map((item) => <button key={item.id} className="shape-cell" title={`Reuse ${item.name}`}
+              onPointerDown={(e) => startFragmentDrag(e, { ghost: thumbGhost(e.currentTarget), onDrop: placeItem(item) })}
+              onClick={(e) => { if (e.detail === 0) placeItem(item)(canvasCenterPoint(), false); }}>
+              <LibraryThumb nodes={item.nodes} edges={[]} />
+            </button>)}
+          </div>
+        </section>}
         {showMine && (
           <section className="lib-section">
             <div className="lib-section-head">

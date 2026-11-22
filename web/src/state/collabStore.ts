@@ -2,8 +2,10 @@
  * state/collabStore — REAL live collaboration client.
  *
  * Connects to the backend room ``/ws/documents/{docId}`` (same origin — anyone
- * with the /d/{id} share link joins, no auth). Protocol: full-state
- * last-write-wins (see backend app/api/collab.py).
+ * with the /d/{id} share link joins, no auth). State frames carry the author's
+ * read base, so only changed object fields are applied (see
+ * backend app/api/collab.py). HTTP/MCP edits publish into the same room;
+ * same-field conflicts are last-write-wins.
  *
  *   outgoing: hello (identity) · state (on local diagram change, throttled)
  *             · cursor (content coords, throttled)
@@ -13,6 +15,7 @@
  * The random guest identity is auto-generated once into localStorage — a
  * stable per-browser "user" without any login (rename via the Share dialog).
  */
+import { mergeRemotePage, type LivePage } from "./collabMerge";
 import { create } from "zustand";
 import { useDiagramStore } from "./diagramStore";
 import { pauseHistory } from "./diagramHistory";
@@ -34,6 +37,9 @@ export interface Peer {
   id: number;
   name: string;
   color: string;
+  kind?: "user" | "agent" | "guest";
+  /** Server-derived mark for agents (e.g. "claude" when the agent is Claude). */
+  icon?: "claude";
 }
 
 export interface RemoteCursor extends Peer {
@@ -110,6 +116,9 @@ let ws: WebSocket | null = null;
 let currentDocId: string | null = null;
 /** True while applying a remote state → the local subscriber must not re-send. */
 let applyingRemote = false;
+export const isApplyingRemote = () => applyingRemote;
+const sentPages = new Map<string, LivePage>();
+const deferredRemovals = new Set<string>();
 let sendTimer: ReturnType<typeof setTimeout> | null = null;
 let cursorLast = 0;
 let unsubscribe: (() => void) | null = null;
@@ -157,7 +166,7 @@ export function onCollabName(handler: ((name: string) => void) | null): void {
 // merge them into its cache (avoids a module cycle) — dropping them left the
 // viewer's cache stale, and the next save overwrote the peer's work.
 let onRemotePageState:
-  | ((pageId: string, diagram: { nodes: unknown[]; edges: unknown[] }) => void)
+  | ((pageId: string, diagram: LivePage, base?: LivePage, removedNodes?: string[], removedEdges?: string[]) => void)
   | null = null;
 export function onCollabPageState(h: typeof onRemotePageState): void {
   onRemotePageState = h;
@@ -186,59 +195,48 @@ export function suppressDiagramBroadcast(fn: () => void): void {
   }
 }
 
-// Ids present in our last broadcast — the diff tells peers what we REMOVED
-// (union-merge only upserts; without explicit tombstones a delete/undo-of-add
-// would never propagate). Kept per active page.
-let lastSentNodeIds = new Set<string>();
-let lastSentEdgeIds = new Set<string>();
-
 /** Throttled (trailing) full-state broadcast + the ids removed since last send. */
 function scheduleStateSend() {
   if (sendTimer) return;
   sendTimer = setTimeout(() => {
     sendTimer = null;
     const s = useDiagramStore.getState();
-    const nodeIds = new Set(Object.keys(s.nodes));
-    const edgeIds = new Set(Object.keys(s.edges));
-    const removedNodeIds = [...lastSentNodeIds].filter((id) => !nodeIds.has(id));
-    const removedEdgeIds = [...lastSentEdgeIds].filter((id) => !edgeIds.has(id));
-    lastSentNodeIds = nodeIds;
-    lastSentEdgeIds = edgeIds;
+    const diagram = { nodes: Object.values(s.nodes).filter((n) => !deferredRemovals.has(n.id)),
+      edges: Object.values(s.edges).filter((e) => ![e.source, e.target].some((a) => "nodeId" in a && deferredRemovals.has(a.nodeId))) };
+    const baseDiagram = sentPages.get(localPageId ?? "p1") ?? { nodes: [], edges: [] };
+    const nodeIds = new Set(Object.keys(s.nodes)), edgeIds = new Set(Object.keys(s.edges));
+    const removedNodeIds = baseDiagram.nodes.map((n) => (n as { id: string }).id).filter((id) => !nodeIds.has(id));
+    const removedEdgeIds = baseDiagram.edges.map((e) => (e as { id: string }).id).filter((id) => !edgeIds.has(id));
+    sentPages.set(localPageId ?? "p1", structuredClone(diagram));
     sendJson({
       t: "state",
       pageId: localPageId,
-      diagram: { nodes: Object.values(s.nodes), edges: Object.values(s.edges) },
+      diagram, baseDiagram,
       removedNodeIds,
       removedEdgeIds,
     });
   }, 120);
 }
 
-function applyRemoteState(
-  diagram: { nodes: unknown[]; edges: unknown[] },
-  removedNodeIds?: string[],
-  removedEdgeIds?: string[],
-) {
+function rememberRemote(pageId: string, diagram: LivePage, base?: LivePage, rmN: string[] = [], rmE: string[] = []) {
+  const previous = sentPages.get(pageId) ?? { nodes: [], edges: [] };
+  sentPages.set(pageId, mergeRemotePage(previous, diagram, base, rmN, rmE));
+}
+
+function applyRemoteState(diagram: LivePage, removedNodeIds: string[] = [], removedEdgeIds: string[] = [], base?: LivePage) {
   const ds = useDiagramStore.getState();
-  // Explicit removals first (tombstones) — a peer's delete/undo-of-add. Never
-  // drop the node the local user is actively dragging.
-  const drag = ds.draggingId;
-  const rmN = (removedNodeIds ?? []).filter((id) => id !== drag);
-  const rmE = removedEdgeIds ?? [];
-  if (rmN.length || rmE.length) {
-    pauseHistory(() => ds.applyPatch({ removeNodeIds: rmN, removeEdgeIds: rmE }));
-  }
-  applyingRemote = true;
-  try {
-    // A remote edit is not a local undo step either. MERGE (not replace) so the
-    // local user's in-progress drag/selection survives — mergeDiagram protects
-    // the dragging node and keeps still-valid selection itself.
-    pauseHistory(() => {
-      ds.mergeDiagram(diagram.nodes as never, diagram.edges as never);
+  const merged = mergeRemotePage({ nodes: Object.values(ds.nodes), edges: Object.values(ds.edges) },
+                                 diagram, base, removedNodeIds, removedEdgeIds);
+  const keepNodes = new Set(merged.nodes.map((n) => (n as { id: string }).id));
+  const keepEdges = new Set(merged.edges.map((e) => (e as { id: string }).id));
+  if (ds.draggingId && !keepNodes.has(ds.draggingId)) deferredRemovals.add(ds.draggingId);
+  suppressDiagramBroadcast(() => pauseHistory(() => {
+    ds.applyPatch({
+      removeNodeIds: Object.keys(ds.nodes).filter((id) => !keepNodes.has(id) && id !== ds.draggingId),
+      removeEdgeIds: Object.keys(ds.edges).filter((id) => !keepEdges.has(id)),
     });
-  } finally {
-    applyingRemote = false;
-  }
+    useDiagramStore.getState().mergeDiagram(merged.nodes as never, merged.edges as never);
+  }));
 }
 
 export function connectCollab(docId: string): void {
@@ -250,10 +248,12 @@ export function connectCollab(docId: string): void {
   ws = socket;
 
   socket.onopen = () => {
+    const ds = useDiagramStore.getState();
+    sentPages.set(localPageId ?? "p1", { nodes: Object.values(ds.nodes), edges: Object.values(ds.edges) });
     // The server evicts any prior connection carrying this tab's id, so a
     // reconnect (network blip, rename) never leaves a duplicate "ghost" of
     // you in the presence list.
-    sendJson({ t: "hello", ...getIdentity(), clientId: tabId });
+    sendJson({ t: "hello", ...getIdentity(), clientId: tabId, pageId: localPageId });
     useCollabStore.setState({ connected: true });
   };
 
@@ -268,6 +268,11 @@ export function connectCollab(docId: string): void {
       case "init": {
         useCollabStore.setState({ you: (msg.you as number) ?? null });
         const diagram = msg.diagram as { nodes: unknown[]; edges: unknown[] } | null;
+        const pages = (msg.pages as Array<LivePage & { id: string }>) ?? [];
+        for (const page of pages) {
+          rememberRemote(page.id, page);
+          if (page.id !== localPageId) onRemotePageState?.(page.id, page);
+        }
         if (diagram && Array.isArray(diagram.nodes)) applyRemoteState(diagram);
         break;
       }
@@ -283,13 +288,19 @@ export function connectCollab(docId: string): void {
         const diagram = msg.diagram as { nodes: unknown[]; edges: unknown[] };
         if (!diagram || !Array.isArray(diagram.nodes)) break;
         if (pid !== null && localPageId !== null && pid !== localPageId) {
-          onRemotePageState?.(pid, diagram);
+          const base = msg.baseDiagram as LivePage | undefined;
+          const rmN = (msg.removedNodeIds as string[]) ?? [], rmE = (msg.removedEdgeIds as string[]) ?? [];
+          rememberRemote(pid, diagram, base ?? undefined, rmN, rmE);
+          onRemotePageState?.(pid, diagram, base ?? undefined, rmN, rmE);
           break;
         }
+        rememberRemote(pid ?? localPageId ?? "p1", diagram, (msg.baseDiagram as LivePage) ?? undefined,
+          (msg.removedNodeIds as string[]) ?? [], (msg.removedEdgeIds as string[]) ?? []);
         applyRemoteState(
           diagram,
           (msg.removedNodeIds as string[]) ?? [],
           (msg.removedEdgeIds as string[]) ?? [],
+          (msg.baseDiagram as LivePage) ?? undefined,
         );
         break;
       }
@@ -341,6 +352,12 @@ export function connectCollab(docId: string): void {
   // Broadcast local diagram edits (drag, add, style, delete, …).
   unsubscribe = useDiagramStore.subscribe((state, prev) => {
     if (applyingRemote) return;
+    if (prev.draggingId && prev.draggingId !== state.draggingId && deferredRemovals.has(prev.draggingId)) {
+      const id = prev.draggingId;
+      deferredRemovals.delete(id);
+      suppressDiagramBroadcast(() => pauseHistory(() => useDiagramStore.getState().applyPatch({ removeNodeIds: [id] })));
+      return;
+    }
     if (state.nodes !== prev.nodes || state.edges !== prev.edges) {
       scheduleStateSend();
     }
@@ -349,6 +366,8 @@ export function connectCollab(docId: string): void {
 
 export function disconnectCollab(): void {
   currentDocId = null;
+  sentPages.clear();
+  deferredRemovals.clear();
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;

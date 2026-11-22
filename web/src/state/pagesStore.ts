@@ -10,6 +10,7 @@
  * Legacy `{nodes,edges}` (single diagram) is wrapped as "Page 1" on load — full
  * backward compatibility.
  */
+import { mergeRemotePage } from "./collabMerge";
 import { create } from "zustand";
 import type { DiagramEdge, DiagramNode } from "../editor-core/diagram";
 import { useDiagramStore } from "./diagramStore";
@@ -238,10 +239,11 @@ export const usePagesStore = create<PagesState>((set, get) => ({
 // were dropped — the viewer's stale cache then overwrote the peer's work on
 // the next save). Frames carry the page's FULL state, so replace is correct.
 // An unknown page id means a peer created a page live: surface a tab for it.
-onCollabPageState((pageId, diagram) => {
+onCollabPageState((pageId, incoming, base, removedNodes, removedEdges) => {
   usePagesStore.setState((s) => {
     if (s.activeId === pageId) return s; // active page flows through diagramStore
     const known = s.pages.some((p) => p.id === pageId);
+    const diagram = mergeRemotePage(s.cache[pageId] ?? { nodes: [], edges: [] }, incoming, base, removedNodes, removedEdges);
     return {
       pages: known
         ? s.pages

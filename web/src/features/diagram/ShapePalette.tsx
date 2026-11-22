@@ -1,3 +1,4 @@
+import { DEFAULT_CORNER_RADIUS } from "../../editor-core/diagram/palette";
 /**
  * features/diagram/ShapePalette — the diagram feature's SHARED shape module:
  *
@@ -119,7 +120,7 @@ export function shapeElement(node: DiagramNode) {
     }
 
     case "rounded": {
-      const r = node.cornerRadius ?? 8;
+      const r = node.cornerRadius ?? DEFAULT_CORNER_RADIUS;
       return <rect x={x} y={y} width={w} height={h} rx={r} ry={r} {...common} />;
     }
 
@@ -444,6 +445,8 @@ export interface PaletteEntry {
   glyph: string;
   /** For icon entries: the icons.ts registry key. */
   iconKey?: string;
+  /** Exact appearance from an existing board shape; coordinates/identity omitted. */
+  prototype?: Partial<DiagramNode>;
   /** Optional fill/stroke override applied when the node is created (sticky colors). */
   fill?: string;
   stroke?: string;
@@ -569,12 +572,13 @@ export function inUseEntries(nodes: DiagramNode[]): PaletteEntry[] {
   const seen = new Set<string>();
   const out: PaletteEntry[] = [];
   for (const n of nodes) {
-    const k = paletteKey(n.kind, n.iconKey);
+    const { id: _id, x: _x, y: _y, z: _z, groupId: _group, text: _text, ...appearance } = n;
+    const k = paletteKey(n.kind, n.iconKey) + JSON.stringify(appearance);
     if (seen.has(k)) continue;
     seen.add(k);
     const match = ALL_ENTRIES.find((e) => paletteKey(e.kind, e.iconKey) === k);
     out.push(
-      match ?? { kind: n.kind, label: n.kind, glyph: "▭", iconKey: n.iconKey },
+      { ...(match ?? { kind: n.kind, label: n.kind, glyph: "▭", iconKey: n.iconKey }), prototype: appearance },
     );
   }
   return out;
@@ -619,10 +623,16 @@ export function MiniGlyph({ entry, mono = false }: { entry: PaletteEntry; mono?:
           // palette preview matches what gets added; fall back to a neutral tile.
           // `mono` (the tool island): Excalidraw-style outline in the
           // button's text colour — no fills, so the toolbar reads as one set.
-          fill: mono ? "none" : entry.fill ?? "#eef4ff",
-          stroke: mono ? "currentColor" : entry.stroke ?? "#5b6472",
-          strokeWidth: mono ? 1.6 : 1.5,
+          fill: mono ? "none" : entry.fill ?? "#ffffff",
+          stroke: mono ? "currentColor" : entry.stroke ?? "#2d3142",
+          strokeWidth: mono ? 1.6 : 1,
         };
+  if (entry.prototype && !mono) {
+    const prototype = entry.prototype;
+    const scale = Math.min(32 / (prototype.w ?? 32), 24 / (prototype.h ?? 24));
+    const w = (prototype.w ?? 32) * scale, h = (prototype.h ?? 24) * scale;
+    Object.assign(node, prototype, { id: "_m", x: (44 - w) / 2, y: (32 - h) / 2, w, h, text: "" });
+  }
   return (
     <svg viewBox="0 0 44 32" width="100%" height="100%" style={{ display: "block" }} aria-hidden="true">
       {shapeElement(node)}

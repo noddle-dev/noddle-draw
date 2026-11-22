@@ -1,0 +1,50 @@
+[
+  {
+    "file": "Inter.ttf",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
+    "git_blob": "047c92f6e2212473dc436020afed689527076d44",
+    "sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031"
+  },
+  {
+    "file": "inter-OFL.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/inter/OFL.txt",
+    "git_blob": "21f6aff961064c2e429f570995e446bcdd555422",
+    "sha256": "5b9321a4298cfeb6b34354164a1c3afc3db114569984c502b9b35d988fd58c57"
+  },
+  {
+    "file": "Cousine.ttf",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/cousine/Cousine-Regular.ttf",
+    "git_blob": "e01ff6f05338a180c65ebadb5617f732d941e961",
+    "sha256": "1da22250675fc4c42fcf3a9736c44bc0570516105331443b663fd5cfbd1412fe"
+  },
+  {
+    "file": "cousine-OFL.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/cousine/OFL.txt",
+    "git_blob": "08e54ce12f944a1c1f785855fbfd0a98d0eaf5ca",
+    "sha256": "b81c4d4dc0a9f72c9155e78187316e016e2012a8102468804173dc61468b906d"
+  },
+  {
+    "file": "GentiumBookPlus.ttf",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumbookplus/GentiumBookPlus-Regular.ttf",
+    "git_blob": "c45ac365da2392996856afc6c8475734f6cd4042",
+    "sha256": "fe7b64eeacc430fcf46836a6f0dfe00d2c5a15483ed36692a2a185cb23ec2a5c"
+  },
+  {
+    "file": "gentiumbookplus-OFL.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/gentiumbookplus/OFL.txt",
+    "git_blob": "5a7a2dd8330a6d5bd70468ca98c69fe8c0d73b3c",
+    "sha256": "c309a440be606e283ccacc746662d714b9c5b5a7a0a10dd2514b90206b55ddfe"
+  },
+  {
+    "file": "Kalam.ttf",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/kalam/Kalam-Regular.ttf",
+    "git_blob": "0c956a29348e69bff24a1ae8952fd0b42569311c",
+    "sha256": "57cecb63d4608019371954274ae1d8c397764debd5b19d4a33c1efa4dc923c0b"
+  },
+  {
+    "file": "kalam-OFL.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/kalam/OFL.txt",
+    "git_blob": "6dd809659a8ccace7ccee108d024d33cd4f936da",
+    "sha256": "f62ef357d3a1c3d27edd35a6e1ba350e8a8d13499797964eeadefbf0b3b15d1f"
+  }
+]

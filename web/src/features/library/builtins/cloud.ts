@@ -1,3 +1,4 @@
+import { DEFAULT_STROKE_WIDTH } from "../../../editor-core/diagram/palette";
 /**
  * features/library/builtins/cloud — AWS / Azure / Google Cloud icon packs,
  * GENERATED from the icon registry (features/diagram/icons + stencils/*), so a
@@ -43,7 +44,7 @@ function pack(group: IconGroup, id: string, name: string, blurb: string, hue: Li
           text: d.label,
           fill: "#ffffff",
           stroke: "#2d3142",
-          strokeWidth: 2,
+          strokeWidth: DEFAULT_STROKE_WIDTH,
           fontSize: 13,
         },
       ],

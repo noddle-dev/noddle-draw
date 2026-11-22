@@ -1,3 +1,4 @@
+import { DEFAULT_STROKE_WIDTH } from "../editor-core/diagram/palette";
 /**
  * state/diagramStore — Zustand slice for the additive node/edge diagram layer.
  *
@@ -230,7 +231,10 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       const nodeMap: Record<string, DiagramNode> = { ...s.nodes };
       for (const n of nodes) nodeMap[n.id] = n;
       if (s.draggingId && s.nodes[s.draggingId]) {
-        nodeMap[s.draggingId] = s.nodes[s.draggingId]; // protect active drag
+        // Protect the gesture geometry, not the whole object: a live MCP
+        // label/style edit must still arrive while this node is being dragged.
+        const local = s.nodes[s.draggingId];
+        nodeMap[s.draggingId] = { ...nodeMap[s.draggingId], x: local.x, y: local.y, w: local.w, h: local.h };
       }
       const edgeMap: Record<string, DiagramEdge> = { ...s.edges };
       for (const e of edges) edgeMap[e.id] = e;
@@ -309,7 +313,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       text: labelFor(kind),
       fill: NODE_FILL,
       stroke: NODE_STROKE,
-      strokeWidth: 2,
+      strokeWidth: DEFAULT_STROKE_WIDTH,
       z: nextZ(get().nodes, get().edges), // new shape paints on top
       ...init, // e.g. { iconKey, text } for icon nodes
     };

@@ -22,3 +22,7 @@ export const STYLE_PAIRS: { name: string; stroke: string; fill: string }[] = [
   { name: "Blue", stroke: "#2563eb", fill: "#dbeafe" },
   { name: "Ember", stroke: "#eb6c36", fill: "#fef9c3" },
 ];
+
+/** Default drawing geometry; explicit per-object styles take precedence. */
+export const DEFAULT_STROKE_WIDTH = 2.5;
+export const DEFAULT_CORNER_RADIUS = 4;

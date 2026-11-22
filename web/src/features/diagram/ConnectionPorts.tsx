@@ -1,3 +1,4 @@
+import { DEFAULT_STROKE_WIDTH } from "../../editor-core/diagram/palette";
 /**
  * features/diagram/ConnectionPorts — the 4 connection dots (N/E/S/W) rendered
  * INSIDE a node's group while it is hovered/selected. Dragging from a dot
@@ -199,7 +200,7 @@ export function ConnectionPorts({
             target: { kind: "floating", nodeId: newId },
             routing: "elbow",
             stroke: "#2d3142", // same ink as shapes (Excalidraw)
-            strokeWidth: 2,
+            strokeWidth: DEFAULT_STROKE_WIDTH,
             endArrow: true,
             startArrow: false,
             animated: false,
@@ -223,7 +224,7 @@ export function ConnectionPorts({
             : { kind: "floating", nodeId: hit.nodeId },
           routing: "elbow",
           stroke: "#2d3142", // same ink as shapes (Excalidraw)
-          strokeWidth: 2,
+          strokeWidth: DEFAULT_STROKE_WIDTH,
           endArrow: true,
           startArrow: false,
           animated: false,

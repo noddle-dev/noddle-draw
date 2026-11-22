@@ -251,16 +251,20 @@ export const api = {
   },
 
   /** Save (overwrite) a document's SVG + editable diagram (null clears it).
-   * `authorName` attributes the version snapshot (localStorage identity). */
+   * `authorName` attributes the version snapshot (localStorage identity).
+   * `baseDiagram` is the diagram this client last loaded/saved — the server
+   * 3-way merges against it so concurrent edits by others survive. */
   async save(
     id: string,
     svg: string,
     diagram?: DiagramPayload | null,
     authorName?: string,
+    baseDiagram?: DiagramPayload | null,
   ): Promise<DocMeta> {
     const body: Record<string, unknown> = { svg };
     if (diagram !== undefined) body.diagram = diagram;
     if (authorName) body.author_name = authorName;
+    if (baseDiagram !== undefined) body.base_diagram = baseDiagram;
     const res = await fetch(`${BASE}/api/documents/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

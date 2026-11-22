@@ -13,7 +13,7 @@ import { contentToStage } from "../../editor-core";
 import type { DiagramNode } from "../../editor-core/diagram";
 import { useEditorStore } from "../../state/editorStore";
 import { useDiagramStore } from "../../state/diagramStore";
-import { nodeFontStack } from "./typography";
+import { nodeFontStack, nodeFontWeight } from "./typography";
 
 export function beginNodeTextEdit(
   node: DiagramNode,
@@ -71,7 +71,7 @@ export function beginNodeTextEdit(
   inp.style.whiteSpace = "pre";
   // Look like the label itself, not a form field.
   inp.style.color = node.textColor ?? "#1a1d23";
-  inp.style.fontWeight = node.bold ? "700" : "400";
+  inp.style.fontWeight = String(nodeFontWeight(node));
   inp.style.fontStyle = node.italic ? "italic" : "normal";
   inp.style.textDecoration = node.underline ? "underline" : "none";
   // Same face the label renders with (sketch handwriting outranks a family).

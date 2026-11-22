@@ -31,6 +31,7 @@ export default function App() {
   useEffect(() => {
     const onDragOver = (e: DragEvent) => {
       e.preventDefault();
+      if (useAppStore.getState().presenting) return;
       document.body.classList.add("dragover");
     };
     const onDragLeave = (e: DragEvent) => {
@@ -38,6 +39,7 @@ export default function App() {
       document.body.classList.remove("dragover");
     };
     const onDrop = (e: DragEvent) => {
+      if (useAppStore.getState().presenting) { e.preventDefault(); document.body.classList.remove("dragover"); return; }
       e.preventDefault();
       document.body.classList.remove("dragover");
       // A raster image dropped while editing lands ON the board at the drop

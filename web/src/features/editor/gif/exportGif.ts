@@ -13,6 +13,7 @@
  * constants live in editor-core/diagram/animation.ts, shared with the live
  * CSS/SMIL renderers.
  */
+import { embedFonts } from "../../../shared/fonts";
 import {
   asFlowSpeed,
   breath,
@@ -31,7 +32,7 @@ import {
   type NodeAnim,
 } from "../../../editor-core/diagram";
 import { useEditorStore } from "../../../state/editorStore";
-import { encodeGif, quantize, type IndexedFrame } from "./gifEncode";
+import { GifEncoder, quantize } from "./gifEncode";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -58,7 +59,7 @@ export interface GifOptions {
 
 export const GIF_DEFAULTS: GifOptions = { durationMs: 1200, fps: 20, scale: 1 };
 
-function svgToImage(svg: string): Promise<HTMLImageElement> {
+async function svgToImage(svg: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
     const img = new Image();
@@ -98,27 +99,9 @@ export async function exportAnimatedGif(
   const frameCount = Math.max(1, Math.round((opts.durationMs / 1000) * opts.fps));
   const delayMs = 1000 / opts.fps;
 
-  const doc = new DOMParser().parseFromString(baseSvg, "image/svg+xml");
+  const doc = new DOMParser().parseFromString(await embedFonts(baseSvg), "image/svg+xml");
   if (doc.querySelector("parsererror")) throw new Error("The board's SVG is invalid.");
   const serializer = new XMLSerializer();
-
-  // Quantize + LZW run in a worker (gifWorker.ts) so the tab never freezes —
-  // frame buffers are TRANSFERRED (zero-copy) and quantization overlaps the
-  // next frame's rasterization. Any worker failure falls back to the old
-  // synchronous path so exports still finish.
-  let worker: Worker | null = null;
-  let workerErr: string | null = null;
-  try {
-    worker = new Worker(new URL("./gifWorker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (ev) => {
-      if (ev.data?.type === "error") workerErr = String(ev.data.message);
-    };
-    worker.onerror = (ev) => {
-      workerErr = ev.message || "GIF worker crashed";
-    };
-  } catch {
-    worker = null;
-  }
 
   // ---- collect edge animations with their per-edge speed/intensity -------
   // (data-* attrs on the edge group; cycle = base/speed so 1.2s-multiple GIF
@@ -234,118 +217,134 @@ export async function exportAnimatedGif(
   }
   const bakedDots: Element[] = [];
 
-  const canvas = document.createElement("canvas");
-  canvas.width = outW;
-  canvas.height = outH;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("Couldn't create the canvas.");
-
-  const frames: IndexedFrame[] = [];
+  let worker: Worker | null = null;
   try {
-  for (let i = 0; i < frameCount; i++) {
-    const t = i * delayMs;
-    // ---- bake every flow style's phase inline (CSS/SMIL never bakes itself)
-    for (const d of dashed) {
-      d.el.setAttribute("stroke-dasharray", d.array);
-      d.el.setAttribute("stroke-dashoffset", (-DASH_DISTANCE * ((t / d.cycle) % 1)).toFixed(2));
+    try {
+      worker = new Worker(new URL("./gifWorker.ts", import.meta.url), { type: "module" });
+    } catch {
+      // Browsers without workers still compress incrementally between UI ticks.
     }
-    for (const b of beams) {
-      b.el.setAttribute("stroke-dasharray", b.array);
-      b.el.setAttribute("stroke-dashoffset", (-BEAM_DISTANCE * ((t / b.cycle) % 1)).toFixed(2));
+    const fallback = worker ? null : new GifEncoder(outW, outH, frameCount > 1);
+    let workerError: Error | null = null;
+    let pendingReject: ((error: Error) => void) | undefined;
+    if (worker) {
+      worker.onerror = (ev) => {
+        workerError = new Error(ev.message || "GIF worker crashed");
+        pendingReject?.(workerError);
+      };
     }
-    for (const p of pulses) {
-      // 1 → min → 1 over one cycle (cosine ≈ the CSS ease-in-out breathe)
-      const opacity = 1 - (1 - p.min) * breath((t / p.cycle) % 1);
-      p.el.setAttribute("stroke-opacity", opacity.toFixed(3));
-    }
-    // node idle animations: transform / opacity / drop-shadow per frame
-    for (const an of animNodes) {
-      const P = NODE_ANIM_PARAMS[an.anim];
-      const b = breath((t / an.cycle) % 1);
-      switch (an.anim) {
-        case "pulse": {
-          const s = 1 + P.scaleAmp * b;
-          an.g.setAttribute(
-            "transform",
-            `translate(${an.cx} ${an.cy}) scale(${s.toFixed(4)}) translate(${-an.cx} ${-an.cy})`,
-          );
-          break;
-        }
-        case "wobble": {
-          // -deg at cycle start, +deg at half-cycle (mirrors the keyframes)
-          const a = -P.rotateDeg + 2 * P.rotateDeg * b;
-          an.g.setAttribute("transform", `rotate(${a.toFixed(3)} ${an.cx} ${an.cy})`);
-          break;
-        }
-        case "breathe":
-          an.g.setAttribute("opacity", (1 - (1 - P.opacityMin) * b).toFixed(3));
-          break;
-        case "glow":
-          // feDropShadow stdDeviation ≈ CSS drop-shadow blur / 2
-          an.shadow?.setAttribute("stdDeviation", ((P.glowMaxBlur / 2) * b).toFixed(2));
-          an.shadow?.setAttribute("flood-opacity", (P.glowMaxOpacity * b).toFixed(3));
-          break;
+    // Bound the queue to one frame. Acknowledgements include quantization AND
+    // LZW, so no expensive backlog is hidden behind a nearly complete bar.
+    const send = (message: object, transfer: Transferable[] = []) =>
+      new Promise<Uint8Array | undefined>((resolve, reject) => {
+        if (workerError) { reject(workerError); return; }
+        pendingReject = reject;
+        worker!.onmessage = (ev) => {
+          pendingReject = undefined;
+          if (ev.data?.type === "error") reject(new Error(String(ev.data.message)));
+          else resolve(ev.data.bytes as Uint8Array | undefined);
+        };
+        worker!.postMessage(message, transfer);
+      });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("Couldn't create the canvas.");
+
+    for (let i = 0; i < frameCount; i++) {
+      const t = i * delayMs;
+      // ---- bake every flow style's phase inline (CSS/SMIL never bakes itself)
+      for (const d of dashed) {
+        d.el.setAttribute("stroke-dasharray", d.array);
+        d.el.setAttribute("stroke-dashoffset", (-DASH_DISTANCE * ((t / d.cycle) % 1)).toFixed(2));
       }
-    }
-    // dots: place packets along each measured path
-    bakedDots.forEach((c) => c.remove());
-    bakedDots.length = 0;
-    for (const de of dotsEdges) {
-      const len = de.measure.getTotalLength();
-      if (!len) continue;
-      const dotsP = (t / dotsCycleMs(len, de.speed)) % 1; // constant velocity, = live renderer
-      const n = dotsForLength(len); // match the live renderer's dot count
-      for (let d = 0; d < n; d++) {
-        const at = ((dotsP + d / n) % 1) * len;
-        const p = de.measure.getPointAtLength(at);
-        const c = doc.createElementNS(SVG_NS, "circle");
-        c.setAttribute("cx", p.x.toFixed(1));
-        c.setAttribute("cy", p.y.toFixed(1));
-        c.setAttribute("r", String(de.r));
-        c.setAttribute("fill", de.fill);
-        de.group.appendChild(c);
-        bakedDots.push(c);
+      for (const b of beams) {
+        b.el.setAttribute("stroke-dasharray", b.array);
+        b.el.setAttribute("stroke-dashoffset", (-BEAM_DISTANCE * ((t / b.cycle) % 1)).toFixed(2));
       }
+      for (const p of pulses) {
+        // 1 → min → 1 over one cycle (cosine ≈ the CSS ease-in-out breathe)
+        const opacity = 1 - (1 - p.min) * breath((t / p.cycle) % 1);
+        p.el.setAttribute("stroke-opacity", opacity.toFixed(3));
+      }
+      // node idle animations: transform / opacity / drop-shadow per frame
+      for (const an of animNodes) {
+        const P = NODE_ANIM_PARAMS[an.anim];
+        const b = breath((t / an.cycle) % 1);
+        switch (an.anim) {
+          case "pulse": {
+            const s = 1 + P.scaleAmp * b;
+            an.g.setAttribute(
+              "transform",
+              `translate(${an.cx} ${an.cy}) scale(${s.toFixed(4)}) translate(${-an.cx} ${-an.cy})`,
+            );
+            break;
+          }
+          case "wobble": {
+            // -deg at cycle start, +deg at half-cycle (mirrors the keyframes)
+            const a = -P.rotateDeg + 2 * P.rotateDeg * b;
+            an.g.setAttribute("transform", `rotate(${a.toFixed(3)} ${an.cx} ${an.cy})`);
+            break;
+          }
+          case "breathe":
+            an.g.setAttribute("opacity", (1 - (1 - P.opacityMin) * b).toFixed(3));
+            break;
+          case "glow":
+            // feDropShadow stdDeviation ≈ CSS drop-shadow blur / 2
+            an.shadow?.setAttribute("stdDeviation", ((P.glowMaxBlur / 2) * b).toFixed(2));
+            an.shadow?.setAttribute("flood-opacity", (P.glowMaxOpacity * b).toFixed(3));
+            break;
+        }
+      }
+      // dots: place packets along each measured path
+      bakedDots.forEach((c) => c.remove());
+      bakedDots.length = 0;
+      for (const de of dotsEdges) {
+        const len = de.measure.getTotalLength();
+        if (!len) continue;
+        const dotsP = (t / dotsCycleMs(len, de.speed)) % 1; // constant velocity, = live renderer
+        const n = dotsForLength(len); // match the live renderer's dot count
+        for (let d = 0; d < n; d++) {
+          const at = ((dotsP + d / n) % 1) * len;
+          const p = de.measure.getPointAtLength(at);
+          const c = doc.createElementNS(SVG_NS, "circle");
+          c.setAttribute("cx", p.x.toFixed(1));
+          c.setAttribute("cy", p.y.toFixed(1));
+          c.setAttribute("r", String(de.r));
+          c.setAttribute("fill", de.fill);
+          de.group.appendChild(c);
+          bakedDots.push(c);
+        }
+      }
+      const img = await svgToImage(serializer.serializeToString(doc.documentElement));
+
+      ctx.fillStyle = "#ffffff"; // GIF has no real alpha — flat white background
+      ctx.fillRect(0, 0, outW, outH);
+      ctx.drawImage(img, 0, 0, outW, outH);
+      const data = ctx.getImageData(0, 0, outW, outH).data;
+
+      if (worker) {
+        await send({ type: "frame", rgba: data.buffer, delayMs, w: outW, h: outH, loop: frameCount > 1 }, [
+          data.buffer as ArrayBuffer,
+        ]);
+      } else {
+        fallback!.addFrame({ ...quantize(data), delayMs });
+      }
+
+      // Every completed tick now represents an already compressed frame.
+      onProgress((i + 1) / (frameCount + 1));
+      await nextTick();
     }
-    const img = await svgToImage(serializer.serializeToString(doc.documentElement));
 
-    ctx.fillStyle = "#ffffff"; // GIF has no real alpha — flat white background
-    ctx.fillRect(0, 0, outW, outH);
-    ctx.drawImage(img, 0, 0, outW, outH);
-    const data = ctx.getImageData(0, 0, outW, outH).data;
-
-    if (worker && !workerErr) {
-      // ImageData owns a fresh buffer per call — safe to transfer away.
-      worker.postMessage({ type: "frame", rgba: data.buffer, delayMs, index: i }, [
-        data.buffer as ArrayBuffer,
-      ]);
-    } else {
-      const { indices, palette } = quantize(data);
-      frames.push({ indices, palette, delayMs });
-    }
-
-    onProgress((i + 1) / (frameCount + 1)); // reserve the last tick for encode
-    await nextTick(); // keep the UI responsive
-  }
+    const bytes = worker ? await send({ type: "finish" }) : fallback!.finish();
+    if (!bytes) throw new Error("GIF encoder returned no data.");
+    const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "image/gif" });
+    onProgress(1);
+    return blob;
   } finally {
+    worker?.terminate();
     measureHost.remove();
   }
-
-  let bytes: Uint8Array;
-  if (worker && !workerErr) {
-    bytes = await new Promise<Uint8Array>((resolve, reject) => {
-      worker!.onmessage = (ev) => {
-        if (ev.data?.type === "done") resolve(ev.data.bytes as Uint8Array);
-        else if (ev.data?.type === "error") reject(new Error(String(ev.data.message)));
-      };
-      worker!.onerror = (ev) => reject(new Error(ev.message || "GIF worker crashed"));
-      worker!.postMessage({ type: "encode", w: outW, h: outH });
-    }).finally(() => worker!.terminate());
-  } else {
-    worker?.terminate();
-    if (workerErr) throw new Error(`GIF encode failed: ${workerErr}`);
-    bytes = encodeGif(outW, outH, frames, true);
-  }
-  onProgress(1);
-  return new Blob([bytes.buffer as ArrayBuffer], { type: "image/gif" });
 }

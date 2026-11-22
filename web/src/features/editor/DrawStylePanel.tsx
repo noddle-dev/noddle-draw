@@ -18,7 +18,7 @@ import { arrangeSelection, flipSelection } from "../../state/arrange";
 import { DEFAULT_BRUSH, DRAW_STYLE_DEFAULTS, useEditorStore } from "../../state/editorStore";
 
 // Palette lives in editor-core (mirrored by the backend AI default — board_palette.py).
-import { FILLS, STROKES, STYLE_PAIRS } from "../../editor-core/diagram/palette";
+import { DEFAULT_CORNER_RADIUS, DEFAULT_STROKE_WIDTH, FILLS, STROKES, STYLE_PAIRS } from "../../editor-core/diagram/palette";
 /** A #rrggbb for <input type=color> (it rejects names / rgba / "transparent"). */
 function toHex(v: string | undefined): string {
   return v && /^#[0-9a-f]{6}$/i.test(v) ? v : "#000000";
@@ -55,9 +55,9 @@ const FONT_SIZES = [
 ];
 /** The three typeface TOKENS — stacks resolve in typography.ts. */
 const FAMILIES: { v: NodeFontFamily; label: string }[] = [
-  { v: "sans", label: "Sans" },
-  { v: "serif", label: "Serif" },
-  { v: "mono", label: "Mono" },
+  { v: "sans", label: "Inter" },
+  { v: "serif", label: "Gentium" },
+  { v: "mono", label: "Cousine" },
 ];
 
 /** Doodle text-align glyph: three lines flush to one side. */
@@ -127,11 +127,11 @@ export function DrawStylePanel() {
   const src: Partial<DiagramNode> = firstSel ?? { ...DRAW_STYLE_DEFAULTS, ...armedInit, ...style };
   const stroke = src.stroke ?? "#2d3142";
   const fill = src.fill ?? "transparent";
-  const width = src.strokeWidth ?? 2;
+  const width = src.strokeWidth ?? DEFAULT_STROKE_WIDTH;
   const dash = src.strokeDash ?? "solid";
   const sketchy = src.sketch === true;
-  // "Rounded" = the big 12px (the house default); legacy shapes carry 0–3px.
-  const round = (src.cornerRadius ?? 3) >= 8;
+  // Any nonzero radius is rounded; the default is deliberately subtle.
+  const round = (src.cornerRadius ?? (src.kind === "rounded" ? DEFAULT_CORNER_RADIUS : 0)) > 0;
   const opacity = src.opacity ?? 1;
   const fontSize = src.fontSize ?? 14;
   const family = src.fontFamily ?? "sans";
@@ -213,7 +213,7 @@ export function DrawStylePanel() {
 
       <div className="ds-label">Stroke width</div>
       <div className="ds-row">
-        {[2, 3, 5].map((w) => (
+        {[DEFAULT_STROKE_WIDTH, 3, 5].map((w) => (
           <button
             key={w}
             className={`ds-opt${width === w ? " active" : ""}`}
@@ -279,7 +279,7 @@ export function DrawStylePanel() {
           className={`ds-opt${round ? " active" : ""}`}
           title="Rounded corners"
           aria-label="Rounded corners"
-          onClick={() => apply({ cornerRadius: 12 })}
+          onClick={() => apply({ cornerRadius: DEFAULT_CORNER_RADIUS })}
         >
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 13 V8 a5 5 0 0 1 5-5 H13" /></svg>
         </button>
@@ -309,15 +309,18 @@ export function DrawStylePanel() {
         {FAMILIES.map((f) => (
           <button
             key={f.v}
-            className={`ds-opt${family === f.v ? " active" : ""}`}
+            className={`ds-opt${!sketchy && family === f.v ? " active" : ""}`}
             style={{ fontFamily: FONT_STACKS[f.v] }}
             title={f.label}
             aria-label={`Font ${f.label}`}
-            onClick={() => apply({ fontFamily: f.v })}
+            onClick={() => apply({ fontFamily: f.v, sketch: false })}
           >
             {f.label}
           </button>
         ))}
+        <button className={`ds-opt${sketchy ? " active" : ""}`} style={{ fontFamily: "Kalam, cursive" }}
+          title="Kalam handwriting with hand-drawn shapes" aria-label="Font Kalam"
+          onClick={() => apply({ fontFamily: "sans", sketch: true })}>Kalam</button>
       </div>
 
       <div className="ds-label">Text style</div>
@@ -681,7 +684,7 @@ function EdgeQuickPanel() {
 
       <div className="ds-label">Stroke width</div>
       <div className="ds-row">
-        {[2, 3, 5].map((w) => (
+        {[DEFAULT_STROKE_WIDTH, 3, 5].map((w) => (
           <button
             key={w}
             className={`ds-opt${firstEdge.strokeWidth === w ? " active" : ""}`}

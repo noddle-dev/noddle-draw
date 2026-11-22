@@ -22,7 +22,7 @@ import { useDiagramStore } from "../../state/diagramStore";
 import { useAppStore } from "../../state/appStore";
 import { panState } from "../../state/panState";
 import { beginNodeTextEdit } from "./nodeTextEdit";
-import { LABEL_INK, nodeFontStack } from "./typography";
+import { LABEL_INK, nodeFontStack, nodeFontWeight } from "./typography";
 import { ConnectionPorts, type PreviewEdge } from "./ConnectionPorts";
 import { shapeElement } from "./ShapePalette";
 import { labelLines } from "./textWrap";
@@ -279,7 +279,7 @@ export function NodeView({
           fontSize={node.fontSize ?? 14}
           // Icon captions default to semibold (thin 400 read weak under a
           // saturated tile); an explicit bold/normal pick still wins.
-          fontWeight={node.bold ? 700 : node.kind === "icon" && node.bold === undefined ? 600 : undefined}
+          fontWeight={nodeFontWeight(node)}
           fontStyle={node.italic ? "italic" : undefined}
           textDecoration={node.underline ? "underline" : undefined}
           fill={node.textColor ?? LABEL_INK}

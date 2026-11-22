@@ -3,7 +3,7 @@
  *
  * REAL: remote live cursors of everyone else in the document's WebSocket room
  * (content coords → screen via the shared camera; pruned when stale).
- * MOCKUP: the floating "Ask Claude" chat bar (routes to the chat panel).
+ * REAL: collapsible AI composer and conversation/status controls.
  */
 import { useEffect, useRef, useState } from "react";
 import { contentToStage } from "../../editor-core";
@@ -72,6 +72,13 @@ function RemoteCursors() {
 }
 
 export function CanvasCollab() {
+  const collapsed = useAppStore((s) => s.canvasChatCollapsed);
+  const chromeVisible = useAppStore((s) => !s.embedMode && !s.presenting && !s.zenMode);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const setCollapsed = (on: boolean) => {
+    useAppStore.getState().setCanvasChatCollapsed(on);
+    requestAnimationFrame(() => on ? launcherRef.current?.focus() : inputRef.current?.focus());
+  };
   const aiThinking = useAppStore((s) => s.aiThinking);
   const queuedChats = useAppStore((s) => s.queuedChats);
   // UNCONTROLLED input — same IME fix as the chat panel: a controlled value +
@@ -118,11 +125,20 @@ export function CanvasCollab() {
   return (
     <>
       <RemoteCursors />
-      {simple && <SimpleChatStatus />}
-      <div className="canvas-chatbar">
+      {chromeVisible && !collapsed && <SimpleChatStatus />}
+      {chromeVisible && <>
+      {collapsed && <button ref={launcherRef} className="canvas-chat-toggle" title="Show AI chat" aria-label="Show AI chat"
+        aria-expanded={false} aria-controls="canvas-ai-composer" onClick={() => setCollapsed(false)}>
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 5.5 h16 v11 H10 l-5 4 v-4 H4 Z M8 9 h8 M8 13 h5" />
+        </svg>
+        AI chat {aiThinking && <span className="chat-busy-dot" aria-label="AI is editing" />}
+      </button>}
+      <div id="canvas-ai-composer" className="canvas-chatbar" hidden={collapsed}>
         <span className="spark">✦</span>
         <input
           ref={inputRef}
+          aria-label="Ask AI-Noddle"
           placeholder={hint}
           defaultValue=""
           onKeyDown={(e) => {
@@ -168,8 +184,13 @@ export function CanvasCollab() {
             </svg>
           </button>
         )}
-        <button className="send" onClick={sendToClaude}>↑</button>
+        <button className="send" aria-label="Send AI message" onClick={sendToClaude}>↑</button>
+        <button className="chat-collapse" title="Hide AI chat" aria-label="Hide AI chat" aria-expanded={true}
+          aria-controls="canvas-ai-composer" onClick={() => setCollapsed(true)}>
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="m5 7 5 5 5-5" /></svg>
+        </button>
       </div>
+      </>}
       {keyModalOpen && <AiKeySettings onClose={() => setKeyModalOpen(false)} />}
     </>
   );

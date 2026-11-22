@@ -11,8 +11,10 @@
  * action) but present/export skip it — see EditorScreen PresentHud + useExport.
  */
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePagesStore } from "../../state/pagesStore";
 import { useEditorStore } from "../../state/editorStore";
+import { useAppStore } from "../../state/appStore";
 
 /* --- doodle icons (rough single-stroke, currentColor) ------------------- */
 function Doodle({ children }: { children: React.ReactNode }) {
@@ -79,14 +81,24 @@ export function PageBar() {
   const renamePage = usePagesStore((s) => s.renamePage);
   const setPageHidden = usePagesStore((s) => s.setPageHidden);
   const deletePage = usePagesStore((s) => s.deletePage);
+  const presenting = useAppStore((s) => s.presenting);
   const viewer = useEditorStore((s) => s.myRole === "viewer");
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  // Fixed-viewport coords for the open menu — the page-bar has overflow-x:auto
-  // (which forces overflow-y:auto too), so an absolutely-positioned dropdown
-  // gets CLIPPED inside the bar. Positioning it `fixed` escapes that clip.
+  // The centred/scrolled dock clips descendants and establishes a containing
+  // block. Portal the menu to the body and anchor it with viewport coordinates.
   const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || presenting) return;
+    const revealActive = () => bar.querySelector(".page-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    revealActive();
+    const observer = new ResizeObserver(revealActive);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [activeId, pages.length, presenting]);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   // Esc closes the open menu; focus moves into the menu when it opens.
@@ -119,8 +131,8 @@ export function PageBar() {
   };
 
   return (
-    <div className="page-bar">
-      <span className="page-bar-icon" title="Page list">☰</span>
+    <div ref={barRef} className="page-bar" role="navigation" aria-label="Board pages">
+      <span className="page-bar-icon" title="Pages" aria-hidden="true"><Doodle><path d="M7 3 h12 v15 H7 Z M4 6 v15 h12" /></Doodle></span>
       {pages.map((p) => {
         const hidden = p.hidden === true;
         return (
@@ -143,6 +155,7 @@ export function PageBar() {
             ) : (
               <button
                 className="page-tab-name"
+                aria-current={p.id === activeId ? "page" : undefined}
                 onClick={() => switchPage(p.id)}
                 onDoubleClick={() => !viewer && beginRename(p.id, p.name)}
               >
@@ -164,7 +177,7 @@ export function PageBar() {
                   const r = e.currentTarget.getBoundingClientRect();
                   setMenuPos({
                     left: Math.max(8, Math.min(r.left, window.innerWidth - 184)),
-                    bottom: window.innerHeight - r.top + 6, // open upward
+                    bottom: window.innerHeight - (barRef.current?.getBoundingClientRect().top ?? r.top) + 6, // above the dock
                   });
                   setMenuFor(p.id);
                 }}
@@ -172,7 +185,7 @@ export function PageBar() {
                 <IconMore />
               </button>
             )}
-            {menuFor === p.id && menuPos && (
+            {menuFor === p.id && menuPos && createPortal(
               <>
                 <div className="menu-backdrop" onClick={() => setMenuFor(null)} />
                 <div
@@ -221,7 +234,7 @@ export function PageBar() {
                     </button>
                   )}
                 </div>
-              </>
+              </>, document.body
             )}
           </div>
         );
