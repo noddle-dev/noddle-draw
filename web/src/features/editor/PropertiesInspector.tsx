@@ -30,6 +30,8 @@ import {
 import { BoardSemanticsForm, ObjectMetaEditor } from "./SemanticFields";
 import { CopyForAIButton, SemanticOverview, useLiveSemanticSummary } from "./SemanticOverview";
 import { hasSemanticMeta } from "../../editor-core/diagram/semantics";
+import type { ObjectMeta } from "../../editor-core/diagram";
+import { SparkMark } from "../diagram/SemanticBadge";
 
 // Partial: only the common kinds get a bespoke glyph/label; the rest fall back
 // (◆ / the kind name) — keeps this in sync-free with the expanding NodeKind set.
@@ -136,21 +138,38 @@ function Section({
   title,
   defaultOpen = false,
   children,
+  icon,
+  badge,
 }: {
   title: string;
   defaultOpen?: boolean;
   children: ReactNode;
+  /** Optional mark before the title (the Semantics section's spark). */
+  icon?: ReactNode;
+  /** Optional count pill after the title. */
+  badge?: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className={`prop-sec${open ? " open" : ""}`}>
       <button type="button" className="prop-sec-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className="chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+        {icon}
         {title}
+        {badge}
       </button>
       {open && <div className="prop-sec-body">{children}</div>}
     </div>
   );
+}
+
+/** Header marks for an object's "Semantics" section: the spark, plus how many
+ * fields are filled in (so a collapsed section still says it holds something). */
+const SEMANTICS_ICON = <span className="sem-sec-mark" aria-hidden="true"><SparkMark size={11} /></span>;
+function semanticsBadge(meta: ObjectMeta | undefined): ReactNode {
+  if (!hasSemanticMeta(meta)) return null;
+  const n = Object.keys(meta ?? {}).length;
+  return <span className="sem-sec-count" title={`${n} semantic field${n === 1 ? "" : "s"} set`}>{n}</span>;
 }
 
 /**
@@ -269,7 +288,7 @@ function NodeProps({ id }: { id: string }) {
       )}
 
       {!isInk && (
-        <Section title="Semantics" defaultOpen={hasSemanticMeta(node.meta)}>
+        <Section title="Semantics" defaultOpen={hasSemanticMeta(node.meta)} icon={SEMANTICS_ICON} badge={semanticsBadge(node.meta)}>
           <ObjectMetaEditor
             kind="node"
             meta={node.meta}
@@ -414,7 +433,7 @@ function EdgeProps({ id }: { id: string }) {
       />
       </Section>
 
-      <Section title="Semantics" defaultOpen={hasSemanticMeta(edge.meta)}>
+      <Section title="Semantics" defaultOpen={hasSemanticMeta(edge.meta)} icon={SEMANTICS_ICON} badge={semanticsBadge(edge.meta)}>
         <ObjectMetaEditor
           kind="edge"
           meta={edge.meta}
@@ -627,25 +646,59 @@ function PageSettings() {
 
 /** Nothing selected: the LIVE semantic overview of the whole page first
  * (zones, components, flows — computed, so it has value on any board), with
- * an "Edit metadata" toggle for the board/page summary, category and tags.
- * An empty page opens straight on the metadata form. */
+ * a metadata toggle for the board/page summary, category and tags. An empty
+ * page opens straight on the metadata form. The card bleeds a few px into the
+ * panel padding so the overview gets every pixel of the ~300px inspector. */
 function BoardOverviewCard({ empty }: { empty: boolean }) {
   const readOnly = useEditorStore((s) => s.myRole === "viewer");
   const [editing, setEditing] = useState(false);
   const summary = useLiveSemanticSummary();
   const showForm = editing || empty;
+  const editLabel = editing ? "Back to the overview" : readOnly ? "View metadata" : "Edit metadata";
   return (
-    <div className="sem-card open sov-card">
+    <div className={`sov-card${showForm ? " editing" : ""}`}>
       <div className="sov-card-head">
-        <span className="sov-card-t">{empty ? "Board semantics" : "Board overview"}</span>
+        <span className="sem-jewel" aria-hidden="true"><SparkMark size={13} /></span>
+        <div className="sov-card-titles">
+          <span className="sov-card-t">{empty ? "Board semantics" : editing ? "Metadata" : "Overview"}</span>
+          <span className="sov-card-sub">
+            {showForm ? (
+              "Board & page"
+            ) : (
+              <>
+                <i className="sov-live-dot" aria-hidden="true" />
+                Live
+              </>
+            )}
+          </span>
+        </div>
         {!empty && <CopyForAIButton summary={summary} compact />}
         {!empty && (
-          <button type="button" className={`sov-edit${editing ? " on" : ""}`} aria-pressed={editing} onClick={() => setEditing(!editing)}>
-            {editing ? "Done" : readOnly ? "Metadata" : "Edit metadata"}
+          <button
+            type="button"
+            className={`sov-edit${editing ? " on" : ""}`}
+            aria-pressed={editing}
+            aria-label={editLabel}
+            title={editLabel}
+            onClick={() => setEditing(!editing)}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {editing ? (
+                <path d="M3.6 8.4 L6.6 11.3 L12.4 4.9" strokeWidth="1.8" />
+              ) : (
+                <>
+                  <path d="M2.4 4.6 H8.2 M11.8 4.6 H13.6 M2.4 11.4 H4.2 M7.8 11.4 H13.6" />
+                  <circle cx="10" cy="4.6" r="1.8" />
+                  <circle cx="6" cy="11.4" r="1.8" />
+                </>
+              )}
+            </svg>
           </button>
         )}
       </div>
-      {showForm ? <BoardSemanticsForm readOnly={readOnly} /> : <SemanticOverview summary={summary} />}
+      <div className="sov-card-body">
+        {showForm ? <BoardSemanticsForm readOnly={readOnly} /> : <SemanticOverview summary={summary} />}
+      </div>
     </div>
   );
 }
