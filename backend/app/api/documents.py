@@ -31,6 +31,7 @@ from app.api.schemas import (
 from app.domain.models import DocumentMeta
 from app.services.auth import GUEST, can
 from app.services.diagram_render import diagram_to_svg
+from app.services.preview_fit import fit_svg_to_content
 
 # Reject oversized uploads before decode/parse — the AI routes already cap at
 # 8MB; do the same for file uploads/imports so a huge body can't tie up a
@@ -241,6 +242,7 @@ def patch_document(
 @router.get("/{doc_id}/export.svg")
 def export_svg(
     doc_id: str,
+    fit: str = "",
     service: DocumentService = Depends(get_service),
 ):
     try:
@@ -258,6 +260,8 @@ def export_svg(
             svg = diagram_to_svg(doc.diagram)
         except Exception:
             svg = doc.svg
+    if fit == "content" and doc.diagram:
+        svg = fit_svg_to_content(svg, doc.diagram)
     return Response(
         content=svg,
         media_type="image/svg+xml",

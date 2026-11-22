@@ -228,6 +228,8 @@ export function SimpleChrome() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Board overview & semantics popover — lifted so the ☰ menu can open it too.
+  const [semOpen, setSemOpen] = useState(false);
   const [shapesOpen, setShapesOpen] = useState(false);
   const panelOpen = useAppStore((s) => s.simplePanelOpen);
   const setPanelOpen = useAppStore((s) => s.setSimplePanelOpen);
@@ -454,6 +456,7 @@ export function SimpleChrome() {
                   onShare={() => setShareOpen(true)}
                   onGif={(scope) => useAppStore.getState().setGifExportScope(scope)}
                   onHistory={() => setHistoryOpen(true)}
+                  onOverview={() => setSemOpen(true)}
                 />
               </div>
             </>
@@ -485,7 +488,7 @@ export function SimpleChrome() {
         )}
         {/* Quiet board semantics (summary/category/tags) — metadata only,
             never drawn on the canvas. */}
-        {docId && <SemanticTrigger readOnly={myRole === "viewer"} />}
+        {docId && <SemanticTrigger readOnly={myRole === "viewer"} open={semOpen} onOpenChange={setSemOpen} />}
       </div>
 
       {/* Excalidraw-style tool hint under the island (eraser only) */}

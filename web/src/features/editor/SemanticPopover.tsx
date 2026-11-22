@@ -2,10 +2,10 @@
  * features/editor/SemanticPopover — the "board semantics" touchpoint in the
  * top-left title island.
  *
- * Trigger: a small gradient spark-graph jewel plus either the board's category
- * pill (when `metadata.category` is set) or a quiet "Overview" label, so the
- * feature is discoverable before anyone annotates the board. Click → a
- * floating panel anchored under the island:
+ * Trigger: a compact gradient spark-graph jewel (32px icon button), plus the
+ * board's category pill when `metadata.category` is set. It is also reachable
+ * from ☰ → Board overview & semantics and the inspector's overview card.
+ * Click → a floating panel anchored under the island:
  *   • hero header — board name, live status line, "Copy for AI" and a sliding
  *     Overview | Metadata switch;
  *   • Overview (default) — the LIVE semantic read of the active page
@@ -117,16 +117,40 @@ export function InfoDoodle({ size = 14 }: { size?: number }) {
   );
 }
 
-export function SemanticTrigger({ readOnly }: { readOnly: boolean }) {
-  const [open, setOpen] = useState(false);
+/**
+ * The title-island touchpoint. Compact by design (the inspector's
+ * BoardOverviewCard already features the overview when nothing is selected):
+ * a quiet 32px jewel button when the board has no category, jewel + category
+ * pill when it does — never a wide pill that crowds the board title. Open
+ * state can be controlled so the ☰ File menu ("Board overview & semantics")
+ * opens the same popover.
+ */
+export function SemanticTrigger({
+  readOnly,
+  open: openProp,
+  onOpenChange,
+}: {
+  readOnly: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [openLocal, setOpenLocal] = useState(false);
+  const open = openProp ?? openLocal;
+  const setOpen = (v: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof v === "function" ? v(open) : v;
+    if (onOpenChange) onOpenChange(next);
+    if (openProp === undefined) setOpenLocal(next);
+  };
   const category = usePagesStore((s) => s.metadata?.category);
   const hasSummary = usePagesStore((s) => !!s.metadata?.summary);
   const anchorRef = useRef<HTMLDivElement>(null);
+  const setOpenRef = useRef(setOpen);
+  setOpenRef.current = setOpen;
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (anchorRef.current && !anchorRef.current.contains(e.target as Node)) setOpen(false);
+      if (anchorRef.current && !anchorRef.current.contains(e.target as Node)) setOpenRef.current(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -134,7 +158,7 @@ export function SemanticTrigger({ readOnly }: { readOnly: boolean }) {
       const t = e.target;
       if (t instanceof HTMLInputElement && t.hasAttribute("data-sov-filter") && t.value) return;
       e.stopPropagation();
-      setOpen(false);
+      setOpenRef.current(false);
     };
     // Capture: the canvas stops propagation of its own pointerdowns.
     document.addEventListener("pointerdown", onDown, true);
@@ -150,8 +174,8 @@ export function SemanticTrigger({ readOnly }: { readOnly: boolean }) {
     <div className="sem-anchor" ref={anchorRef}>
       <button
         type="button"
-        className={`simple-island sem-trigger${category ? " has-cat" : ""}${open ? " active" : ""}`}
-        title="Board overview & semantics"
+        className={`simple-island sem-trigger${category ? " has-cat" : " icon-only"}${open ? " active" : ""}`}
+        title={category ? `Board overview & semantics — ${label}` : "Board overview & semantics"}
         aria-label={category ? `Board overview & semantics — ${label}` : "Board overview & semantics"}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -161,10 +185,7 @@ export function SemanticTrigger({ readOnly }: { readOnly: boolean }) {
           <SparkMark size={13} />
           {!category && hasSummary && <span className="sem-dot" />}
         </span>
-        {category ? <span className="sem-cat-pill">{label}</span> : <span className="sem-trigger-t">Overview</span>}
-        <svg className="sem-trigger-chev" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M2.8 4.4 L6 7.6 L9.2 4.4" />
-        </svg>
+        {category && <span className="sem-cat-pill">{label}</span>}
       </button>
       {open && <SemanticPopoverBody readOnly={readOnly} onClose={() => setOpen(false)} />}
     </div>
